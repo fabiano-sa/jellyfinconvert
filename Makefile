@@ -31,10 +31,14 @@ help:
 venv:
 	python3 -m venv .venv
 
+.PHONY: dev
+dev: venv install
+
 .PHONY: install
-install:
+ install:
 	. .venv/bin/activate && $(PY) -m pip install --upgrade pip && \
-	$(PIP) install pytest black ruff mypy python-dotenv pre-commit
+	pip install -e . && \
+	pip install pytest black ruff mypy python-dotenv pre-commit
 
 # -------------------------
 # Qualidade
@@ -59,7 +63,11 @@ check: lint type test
 # -------------------------
 .PHONY: run
 run:
-	. .venv/bin/activate && $(PY) -m src.app.main
+	. .venv/bin/activate && jfconv -h
+
+.PHONY: run_cli
+run_cli:
+	. .venv/bin/activate && jfconv -h
 
 # -------------------------
 # pre-commit
