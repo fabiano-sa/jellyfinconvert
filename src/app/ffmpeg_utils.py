@@ -205,3 +205,54 @@ def default_sub_ext(codec: str) -> str:
     if c in {"dvd_subtitle", "dvb_subtitle", "vobsub"}:
         return ".sub"  # pode gerar .sub + .idx dependendo do fonte
     return ".srt"
+
+# --- UI helpers for subtitles ------------------------------------------------
+
+LANG_NAMES = {
+    "und": "Undetermined",
+    "eng": "English",
+    "en":  "English",
+    "por": "Portuguese",
+    "pt":  "Portuguese",
+    "pt-br": "Portuguese (Brazil)",
+    "spa": "Spanish",
+    "es":  "Spanish",
+    "jpn": "Japanese",
+    "ja":  "Japanese",
+    "ita": "Italian",
+    "deu": "German",
+    "ger": "German",
+    "de":  "German",
+    "fra": "French",
+    "fre": "French",
+    "fr":  "French",
+}
+
+def flag_emoji(lang: str) -> str:
+    l = (lang or "").lower()
+    # mapeia alguns casos comuns; 'und' não tem bandeira
+    if l in {"pt", "por"}: return "🇵🇹"
+    if l in {"pt-br", "pt_br", "por-br"}: return "🇧🇷"
+    if l in {"en", "eng"}: return "🇺🇸"
+    if l in {"es", "spa"}: return "🇪🇸"
+    if l in {"ja", "jpn"}: return "🇯🇵"
+    if l in {"fr", "fra", "fre"}: return "🇫🇷"
+    if l in {"de", "deu", "ger"}: return "🇩🇪"
+    return ""
+
+def lang_pretty(lang: str, *, flags: bool = True) -> str:
+    l = (lang or "").lower()
+    name = LANG_NAMES.get(l, l.upper() if l else "UND")
+    flg = flag_emoji(l) if flags else ""
+    return f"{flg} {name}" if flg else name
+
+def supports_color() -> bool:
+    try:
+        import os, sys
+        return sys.stdout.isatty() and (os.environ.get("TERM") not in (None, "dumb"))
+    except Exception:
+        return False
+
+def color(s: str, code: str) -> str:
+    # code: e.g. "1;36" (bold cyan), "1;33" (bold yellow)
+    return f"\033[{code}m{s}\033[0m"

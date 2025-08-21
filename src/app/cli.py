@@ -17,7 +17,11 @@ from typing import List, Tuple
 from .config import DEFAULTS
 from .converter import ConvertOptions, convert_file
 from .reporting import FileReport, Reporter
-from .ffmpeg_utils import human_size, ffprobe_info, list_subtitle_streams, sub_short_desc, is_sdh_sub, is_text_sub, default_sub_ext
+from .ffmpeg_utils import (
+    human_size, ffprobe_info, list_subtitle_streams, sub_short_desc,
+    is_sdh_sub, is_text_sub, default_sub_ext,
+    lang_pretty, supports_color, color
+)
 
 from dataclasses import replace
 from .filename_infer import infer_title_and_year
@@ -134,24 +138,72 @@ def prompt_audio_choice(streams: list[dict]) -> int:
         print(f"    Invalid choice. Enter a number between 0 and {len(streams)-1}.")
 
 
+def _truncate(s: str, maxlen: int = 40) -> str:
+    s = s or ""
+    return (s[: maxlen - 1] + "…") if len(s) > maxlen else s
+
+def _parse_indexes(inp: str, max_idx: int) -> list[int]:
+    """
+    Aceita: vírgula, espaço ou ';' como separadores; intervalos 2-5; 'all'/'none'.
+    Ignora fora de faixa; deduplica.
+    """
+    s = (inp or "").strip().lower()
+    if not s:
+        return []
+    if s in {"all", "none"}:
+        return list(range(max_idx + 1)) if s == "all" else []
+    picks: set[int] = set()
+    for part in re.split(r"[,\s;]+", s):
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            if a.isdigit() and b.isdigit():
+                start, end = int(a), int(b)
+                if start > end:
+                    start, end = end, start
+                for v in range(start, end + 1):
+                    if 0 <= v <= max_idx:
+                        picks.add(v)
+        elif part.isdigit():
+            v = int(part)
+            if 0 <= v <= max_idx:
+                picks.add(v)
+    return sorted(picks)
+
 def prompt_subs_choice(streams: list[dict], preselect: list[int]) -> list[int]:
-    print("  → Subtitles detected. Choose which to extract (indexes comma-separated), or Enter to accept suggestion.")
+    """Tabela alinhada e confirmação final. Enter aceita sugestão (não-SDH)."""
+    use_color = supports_color()
+    use_flags = False  # emojis desativados => alinhamento perfeito
+    print("  → Subtitles detected. Choose which to extract.")
+    hdr = f"{'IDX':>3}  {'LANG':<28} {'CODEC':<8} {'CH':<2} {'FORCED':<6} {'SDH':<3}  TITLE"
+    print(color(hdr, "1;36") if use_color else hdr)
+
     for i, s in enumerate(streams):
+        tags = s.get("tags") or {}
+        lang = (tags.get("language") or "und").lower()
+        title = _truncate(tags.get("title") or "", 40)
+        codec = (s.get("codec_name") or "?").lower()
+        ch = s.get("channels") or ""
+        forced = "yes" if int((s.get("disposition") or {}).get("forced", 0)) == 1 else "no"
+        sdh = "yes" if is_sdh_sub(s) else "no"
+        lang_col = f"{lang_pretty(lang, flags=use_flags)} ({lang.upper()})"
         mark = "*" if i in preselect else " "
-        print(f"    [{i}] {mark} {sub_short_desc(s)}")
+        line = f"{mark}{i:>2}   {lang_col:<28} {codec:<8} {str(ch):<2} {forced:<6} {sdh:<3}  {title}"
+        print(color(line, "1;33") if (use_color and i in preselect) else line)
+
+    default_str = ",".join(str(i) for i in preselect) if preselect else "none"
     while True:
-        raw = input(f"    Select (e.g. 0,2,3 or 'all') [default: {','.join(map(str, preselect)) or 'none'}]: ").strip().lower()
-        if raw == "":
-            return preselect
-        if raw == "all":
-            return list(range(len(streams)))
-        try:
-            picks = [int(x) for x in raw.split(",") if x.strip() != ""]
-            if all(0 <= x < len(streams) for x in picks):
-                return picks
-        except Exception:
-            pass
-        print(f"    Invalid selection. Use numbers within 0..{len(streams)-1}, comma-separated, or 'all'.")
+        raw = input(f"    Select (e.g. 0,2-4 or 'all'/'none') [default: {default_str}]: ").strip()
+        picks = preselect if raw == "" else _parse_indexes(raw, len(streams) - 1)
+        if picks == [] and raw.lower() not in {"", "none"}:
+            print(f"    No valid indexes parsed. Try numbers/ranges within 0..{len(streams)-1}.")
+            continue
+        print(f"    → Using: {picks if picks else 'none'}")
+        ok = input("    Confirm? [Y/n]: ").strip().lower()
+        if ok in {"", "y", "yes"}:
+            return picks
+
 
 
 def run_cli() -> int:
