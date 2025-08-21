@@ -7,7 +7,7 @@ Changes:
 - Prints per-file duration and OK/ERR
 - Final summary with report locations
 """
-
+import re
 import argparse
 import sys
 import time
