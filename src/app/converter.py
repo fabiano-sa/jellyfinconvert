@@ -18,7 +18,7 @@ from typing import Optional, Tuple, List
 from .config import DEFAULTS, Defaults
 from .jellyfin_naming import movie_filename
 from .metadata import build_metadata
-from .ffmpeg_utils import ffprobe_info, build_scale_filter, run, run_streaming, get_duration
+from .ffmpeg_utils import ffprobe_info, build_scale_filter, run, run_streaming, get_duration, is_text_sub, default_sub_ext, sub_short_desc, run
 
 
 @dataclass
@@ -115,6 +115,55 @@ def build_ffmpeg_cmd(
 
     cmd += [str(output_path)]
     return cmd
+
+def _build_sub_extraction_cmd(src: Path, sub_index: int, out_path: Path, codec_name: str) -> list[str]:
+    """
+    Build ffmpeg command to extract a subtitle stream:
+    - For text codecs ⇒ convert to SRT: -map 0:s:i -c:s srt
+    - For image codecs (PGS/DVD) ⇒ copy: -map 0:s:i -c:s copy
+    """
+    is_text = is_text_sub(codec_name)
+    cmd = [
+        "ffmpeg", "-y",
+        "-hide_banner", "-loglevel", "info",
+        "-i", str(src),
+        "-map", f"0:s:{sub_index}",
+        "-c:s", "srt" if is_text else "copy",
+        str(out_path),
+    ]
+    return cmd
+
+def extract_subs(src: Path, streams: list[dict], indexes: list[int], base_out_dir: Path, base_name: str) -> list[Path]:
+    """
+    Extract selected subtitle streams. Returns list of generated files.
+    base_name: e.g. 'Cyberpunk Edgerunners (2012)' to compose file names.
+    """
+    base_out_dir.mkdir(parents=True, exist_ok=True)
+    out_files: list[Path] = []
+    for i in indexes:
+        s = streams[i]
+        tags = s.get("tags") or {}
+        lang = (tags.get("language") or "und").lower()
+        title = tags.get("title") or ""
+        codec = s.get("codec_name") or "unknown"
+        ext = default_sub_ext(codec)
+        suffix_bits = [lang]
+        if title:
+            # evitar espaços/delimitar; limpa título simples
+            clean_title = " ".join(title.replace("/", "-").split())
+            suffix_bits.append(clean_title)
+        suffix = "." + ".".join([b for b in suffix_bits if b])
+        out_name = f"{base_name}{suffix}{ext}"
+        out_path = base_out_dir / out_name
+        cmd = _build_sub_extraction_cmd(src, i, out_path, codec)
+        code = run(cmd)[0]
+        if code == 0 and out_path.exists():
+            out_files.append(out_path)
+        else:
+            # tenta explicar mínimamente
+            print(f"  ⚠️  Failed to extract subtitle #{i} ({sub_short_desc(s)}).")
+    return out_files
+
 
 
 def convert_file(src: Path, out_dir: Path, opts) -> Tuple[bool, str, Path, List[str]]:

@@ -17,7 +17,7 @@ from typing import List, Tuple
 from .config import DEFAULTS
 from .converter import ConvertOptions, convert_file
 from .reporting import FileReport, Reporter
-from .ffmpeg_utils import human_size, ffprobe_info
+from .ffmpeg_utils import human_size, ffprobe_info, list_subtitle_streams, sub_short_desc, is_sdh_sub, is_text_sub, default_sub_ext
 
 from dataclasses import replace
 from .filename_infer import infer_title_and_year
@@ -58,6 +58,17 @@ def parse_args() -> argparse.Namespace:
     # copy policies (mantemos simples)
     p.add_argument("--copy-audio-when", choices=["aac", "never"], default="aac", help="Copy audio when AAC")
     p.add_argument("--no-copy-subs", action="store_true", help="Disable subtitle copy/convert")
+
+    p.add_argument("--extract-subs", action="store_true",
+               help="Detect and extract embedded subtitles to files")
+    p.add_argument("--subs-out", type=Path, default=None,
+               help="Directory to write extracted subtitles (default: alongside output video)")
+    p.add_argument("--subs-select", type=str, default=None,
+               help="Comma-separated subtitle stream indexes to extract (or 'all'). If omitted, non-SDH are preselected and you can confirm/edit interactively.")
+    p.add_argument("--no-ask-subs", action="store_true",
+               help="Do not prompt for subtitle selection; use --subs-select or default non-SDH")
+
+
     return p.parse_args()
 
 
@@ -121,6 +132,26 @@ def prompt_audio_choice(streams: list[dict]) -> int:
             if 0 <= idx < len(streams):
                 return idx
         print(f"    Invalid choice. Enter a number between 0 and {len(streams)-1}.")
+
+
+def prompt_subs_choice(streams: list[dict], preselect: list[int]) -> list[int]:
+    print("  → Subtitles detected. Choose which to extract (indexes comma-separated), or Enter to accept suggestion.")
+    for i, s in enumerate(streams):
+        mark = "*" if i in preselect else " "
+        print(f"    [{i}] {mark} {sub_short_desc(s)}")
+    while True:
+        raw = input(f"    Select (e.g. 0,2,3 or 'all') [default: {','.join(map(str, preselect)) or 'none'}]: ").strip().lower()
+        if raw == "":
+            return preselect
+        if raw == "all":
+            return list(range(len(streams)))
+        try:
+            picks = [int(x) for x in raw.split(",") if x.strip() != ""]
+            if all(0 <= x < len(streams) for x in picks):
+                return picks
+        except Exception:
+            pass
+        print(f"    Invalid selection. Use numbers within 0..{len(streams)-1}, comma-separated, or 'all'.")
 
 
 def run_cli() -> int:
@@ -269,7 +300,48 @@ def run_cli() -> int:
          # 5) Clone opts com título/ano por arquivo
         file_opts = replace(opts, title=file_title, year=file_year, audio_track=chosen_audio_track)
 
-        # 6) Converter (salva em target_dir)
+        # 6) (opcional) Extração de legendas embutidas
+        if args.extract_subs:
+            try:
+                info = ffprobe_info(src)
+                sub_streams = list_subtitle_streams(info)
+                if sub_streams:
+                    # sugestão: apenas não-SDH
+                    non_sdh = [i for i, s in enumerate(sub_streams) if not is_sdh_sub(s)]
+                    suggested = non_sdh if non_sdh else []
+                    # seleção automática se --subs-select foi fornecido
+                    if args.subs_select:
+                        if args.subs_select.strip().lower() == "all":
+                            picks = list(range(len(sub_streams)))
+                        else:
+                            picks = [int(x) for x in args.subs_select.split(",") if x.strip()!=""]
+                    else:
+                        if not args.no_ask_subs and sys.stdin.isatty():
+                            picks = prompt_subs_choice(sub_streams, suggested)
+                        else:
+                            picks = suggested  # não-interativo: tarefa limpa
+                    # decide pasta: por padrão AO LADO do vídeo de saída (melhor para players)
+                    subs_dir = args.subs_out or target_dir
+                    base_name = movie_filename(file_title, file_year, (args.container or DEFAULTS.container))
+                    base_name = Path(base_name).with_suffix("").name  # sem extensão
+                    # chama extração
+                    from .converter import extract_subs  # import leve, evita ciclo
+                    generated = extract_subs(src, sub_streams, picks, subs_dir, base_name)
+                    if args.verbose:
+                        if generated:
+                            print("  💬 Subtitles extracted:")
+                            for p in generated:
+                                print("     •", p)
+                        else:
+                            print("  ℹ️  No subtitles extracted.")
+                else:
+                    if args.verbose:
+                        print("  ℹ️  No embedded subtitles found.")
+            except Exception as e:
+                print(f"  ⚠️  Subtitle inspection/extraction failed: {e}")
+
+
+        # 7) Converter (salva em target_dir)
         success, err, outpath, cmd = convert_file(src, target_dir, file_opts)
         
         print(" ffmpeg:", " ".join(cmd))

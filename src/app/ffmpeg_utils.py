@@ -147,3 +147,61 @@ def build_scale_filter(max_height: Optional[int], streams: Dict[str, Any]) -> Op
     if height and height > max_height:
         return f"scale=-2:{max_height}"
     return None
+
+# --- Subtitles helpers -------------------------------------------------------
+
+def list_subtitle_streams(info: Dict[str, Any]) -> list[dict]:
+    """Return only subtitle streams from ffprobe JSON."""
+    return [s for s in info.get("streams", []) if s.get("codec_type") == "subtitle"]
+
+SDH_HINTS = {"sdh", "cc", "closed", "hearing", "impaired", "hi"}  # lowercased tokens
+
+def is_sdh_sub(stream: dict) -> bool:
+    """Heurística: tenta identificar SDH/Closed Captions por tags/disposition/título."""
+    disp = stream.get("disposition") or {}
+    if int(disp.get("hearing_impaired", 0)) == 1:
+        return True
+    tags = stream.get("tags") or {}
+    t_title = (tags.get("title") or "").lower()
+    t_lang = (tags.get("language") or "").lower()
+    # alguns lançamentos marcam SDH no título ou no language (ex.: "eng-sdh")
+    haystack = f"{t_title} {t_lang}".lower()
+    return any(h in haystack for h in SDH_HINTS)
+
+def sub_short_desc(s: dict) -> str:
+    """Resumo para UI: [idx] lang=por | codec=ass | sdh/no | title=... | forced=yes/no"""
+    tags = s.get("tags") or {}
+    lang = (tags.get("language") or "und").lower()
+    title = tags.get("title") or ""
+    codec = s.get("codec_name") or "?"
+    forced = (s.get("disposition") or {}).get("forced", 0)
+    sdh = is_sdh_sub(s)
+    bits = [
+        f"lang={lang}",
+        f"codec={codec}",
+        f"sdh={'yes' if sdh else 'no'}",
+        f"forced={'yes' if int(forced)==1 else 'no'}",
+    ]
+    if title:
+        bits.append(f"title={title}")
+    return " | ".join(bits)
+
+def is_text_sub(codec: str) -> bool:
+    """Text-based codecs we can convert to SRT."""
+    return codec.lower() in {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
+
+def default_sub_ext(codec: str) -> str:
+    c = codec.lower()
+    if c in {"subrip", "srt"}:
+        return ".srt"
+    if c in {"ass", "ssa"}:
+        return ".srt"  # vamos converter pra srt
+    if c in {"webvtt"}:
+        return ".srt"  # converte pra srt
+    if c in {"mov_text", "text"}:
+        return ".srt"
+    if c in {"hdmv_pgs_subtitle", "pgs"}:
+        return ".sup"
+    if c in {"dvd_subtitle", "dvb_subtitle", "vobsub"}:
+        return ".sub"  # pode gerar .sub + .idx dependendo do fonte
+    return ".srt"
