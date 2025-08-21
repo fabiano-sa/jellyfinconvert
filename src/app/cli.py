@@ -9,6 +9,7 @@ Changes:
 """
 
 import argparse
+import sys
 import time
 from pathlib import Path
 from typing import List, Tuple
@@ -16,7 +17,7 @@ from typing import List, Tuple
 from .config import DEFAULTS
 from .converter import ConvertOptions, convert_file
 from .reporting import FileReport, Reporter
-from .ffmpeg_utils import human_size
+from .ffmpeg_utils import human_size, ffprobe_info
 
 from dataclasses import replace
 from .filename_infer import infer_title_and_year
@@ -38,15 +39,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", default=False, help="Only print ffmpeg command")
     p.add_argument("--overwrite", action="store_true", help="Allow overwriting outputs")
     p.add_argument("--skip-existing", action="store_true", help="Skip when expected output already exists")
+    p.add_argument("--no-ask-audio", action="store_true",
+               help="Do not ask which audio track to use (default asks on TTY when multiple)")
     p.add_argument(
-    "--audio-track", type=int, metavar="IDX",
-    help="Audio stream index to use (0-based). Ex.: 0 = first, 1 = second..."
+        "--audio-track", type=int, metavar="IDX", default=None,
+        help="Audio stream index to use (0-based). Ex.: 0 = first, 1 = second..."
     )
 
     p.add_argument("--organize", action="store_true",
                help="Place outputs into 'Title (Year)/Title (Year).ext' folders")
     p.add_argument("--ask-missing", action="store_true",
                help="If title/year cannot be inferred, ask interactively per file")
+    p.add_argument("--ask-audio", action="store_true",
+               help="If multiple audio tracks, ask which one to use")
     p.add_argument("-v", "--verbose", action="store_true",
                help="Show full ffmpeg logs (and progress bar when possible)")
 
@@ -92,9 +97,36 @@ def prompt_title_year(suggest_title: str | None, suggest_year: int | None) -> tu
     return title, year
 
 
+
+def _describe_audio_stream(s: dict) -> str:
+    tags = s.get("tags") or {}
+    lang = (tags.get("language") or "und").lower()
+    title = tags.get("title") or ""
+    codec = s.get("codec_name") or "?"
+    ch = s.get("channels") or "?"
+    extras = f" | {title}" if title else ""
+    return f"lang={lang} | codec={codec} | ch={ch}{extras}"
+
+def prompt_audio_choice(streams: list[dict]) -> int:
+    print("  → Multiple audio tracks detected. Choose one (index):")
+    for i, s in enumerate(streams):
+        print(f"    [{i}] {_describe_audio_stream(s)}")
+    default = 0
+    while True:
+        raw = input(f"    Use which index? [default: {default}]: ").strip()
+        if raw == "":
+            return default
+        if raw.isdigit():
+            idx = int(raw)
+            if 0 <= idx < len(streams):
+                return idx
+        print(f"    Invalid choice. Enter a number between 0 and {len(streams)-1}.")
+
+
 def run_cli() -> int:
     args = parse_args()
     ask_if_needed(args)
+    interactive_tty = sys.stdin.isatty()
 
     inputs = iter_inputs(args.input, bool(args.recursive))
     if not inputs:
@@ -116,7 +148,8 @@ def run_cli() -> int:
         year=args.year,
         dry_run=bool(args.dry_run),
         verbose=bool(args.verbose),
-        audio_track=args.audio_track,
+        audio_track=getattr(args, "audio_track", None),
+        no_copy_subs=bool(args.no_copy_subs),
     )
 
     # Skip-existing (baseado no nome final esperado)
@@ -169,7 +202,35 @@ def run_cli() -> int:
             file_title = inferred_title
             file_year = args.year if args.year else inferred_year
 
-        # 2) Decide output dir (organize or flat)
+        # 2) Se necessário, decidir/perguntar a faixa de áudio
+        chosen_audio_track = args.audio_track
+        if chosen_audio_track is None:
+            try:
+                info = ffprobe_info(src)
+                audio_streams = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
+                if len(audio_streams) == 1:
+                    chosen_audio_track = 0
+                    if args.verbose:
+                        print(f"  ℹ️  Single audio track detected → using index 0 ({_describe_audio_stream(audio_streams[0])})")
+                elif len(audio_streams) >= 2:
+                    # Regra: pergunta se estivermos num TTY e usuário não bloqueou com --no-ask-audio
+                    if interactive_tty and not args.no_ask_audio:
+                        chosen_audio_track = prompt_audio_choice(audio_streams)
+                    else:
+                        # Não interativo: cai no índice 0 de forma determinística
+                        chosen_audio_track = 0
+                    if args.verbose and chosen_audio_track is not None:
+                        print(f"  ℹ️  Chosen audio index: {chosen_audio_track} ({_describe_audio_stream(audio_streams[chosen_audio_track])})")
+                else:
+                    # padrão: usa 0 se não pedir escolha
+                    chosen_audio_track = 0 if audio_streams else 0
+            except Exception as e:
+                # se ffprobe falhar aqui, converter cuidará do fallback
+                if args.verbose:
+                    print(f"  ⚠️  ffprobe failed during audio inspection: {e} — falling back to index 0")
+                chosen_audio_track = 0
+
+        # 3) Decide output dir (organize or flat)
         target_dir = out_dir
         if args.organize:
             target_dir = out_dir / movie_folder(file_title, file_year)
@@ -206,7 +267,7 @@ def run_cli() -> int:
         t0 = time.time()
 
          # 5) Clone opts com título/ano por arquivo
-        file_opts = replace(opts, title=file_title, year=file_year)
+        file_opts = replace(opts, title=file_title, year=file_year, audio_track=chosen_audio_track)
 
         # 6) Converter (salva em target_dir)
         success, err, outpath, cmd = convert_file(src, target_dir, file_opts)
