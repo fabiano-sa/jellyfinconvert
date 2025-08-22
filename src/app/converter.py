@@ -13,12 +13,20 @@ Not yet in M2 (we'll add in M3):
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, List
 
 from .config import DEFAULTS, Defaults
+from .ffmpeg_utils import (
+    build_scale_filter,
+    default_sub_ext,
+    ffprobe_info,
+    get_duration,
+    is_text_sub,
+    run,
+    run_streaming,
+    sub_short_desc,
+)
 from .jellyfin_naming import movie_filename
 from .metadata import build_metadata
-from .ffmpeg_utils import ffprobe_info, build_scale_filter, run, run_streaming, get_duration, is_text_sub, default_sub_ext, sub_short_desc, run
 
 
 @dataclass
@@ -33,16 +41,16 @@ class ConvertOptions:
     - dry_run: if True, we only print the command
     """
     hevc: bool = False                 # True => H.265, False => H.264
-    crf: Optional[int] = None          # if None, use default by codec
-    bitrate: Optional[str] = None      # overrides CRF if set
-    max_height: Optional[int] = None   # e.g., 1080 => limit to 1080p
-    container: Optional[str] = None    # "mp4" or "mkv"
-    preset: Optional[str] = None       # ffmpeg preset
-    title: Optional[str] = None
-    year: Optional[int] = None
+    crf: int | None = None          # if None, use default by codec
+    bitrate: str | None = None      # overrides CRF if set
+    max_height: int | None = None   # e.g., 1080 => limit to 1080p
+    container: str | None = None    # "mp4" or "mkv"
+    preset: str | None = None       # ffmpeg preset
+    title: str | None = None
+    year: int | None = None
     dry_run: bool = False              # M2 default: execute unless user asks for dry-run
     verbose: bool = False
-    audio_track: Optional[int] = None
+    audio_track: int | None = None
     no_copy_subs: bool = False
 
 def _target_video_codec(hevc: bool, defaults: Defaults) -> str:
@@ -52,12 +60,12 @@ def _target_video_codec(hevc: bool, defaults: Defaults) -> str:
 def build_ffmpeg_cmd(
     input_path: Path,
     output_path: Path,
-    scale_filter: Optional[str],
+    scale_filter: str | None,
     opts: ConvertOptions,
     defaults: Defaults = DEFAULTS,
     audio_map_index: int = 0,
     include_sub_0_optional: bool = True,
-) -> List[str]:
+) -> list[str]:
     """
     Build an ffmpeg command list based on options + decided scale filter.
     """
@@ -74,17 +82,17 @@ def build_ffmpeg_cmd(
         video_quality_args = ["-crf", str(crf)]
 
     meta = build_metadata(opts.title, opts.year)
-    meta_args: List[str] = []
+    meta_args: list[str] = []
     for k, v in meta.items():
         meta_args += ["-metadata", f"{k}={v}"]
 
-    filter_args: List[str] = []
+    filter_args: list[str] = []
     if scale_filter:
         # Keep aspect ratio: scale=-2:MAX (already decided upstream)
         filter_args = ["-vf", scale_filter]
 
    # Mapas de streams (vídeo 0, áudio escolhido)
-    map_args: List[str] = ["-map", "0:v:0", "-map", f"0:a:{audio_map_index}"]
+    map_args: list[str] = ["-map", "0:v:0", "-map", f"0:a:{audio_map_index}"]
 
     # Subtítulos: por padrão não copiar para MP4 (PGS não é suportado) ou quando no_copy_subs=True
     ext = output_path.suffix.lower().lstrip(".")
@@ -92,7 +100,7 @@ def build_ffmpeg_cmd(
     if can_copy_subs:
         map_args += ["-map", "0:s:0?"]
 
-    cmd: List[str] = [
+    cmd: list[str] = [
         "ffmpeg",
         "-y",  # allow overwrite (we'll add policies later)
         "-hide_banner",
@@ -166,7 +174,7 @@ def extract_subs(src: Path, streams: list[dict], indexes: list[int], base_out_di
 
 
 
-def convert_file(src: Path, out_dir: Path, opts) -> Tuple[bool, str, Path, List[str]]:
+def convert_file(src: Path, out_dir: Path, opts) -> tuple[bool, str, Path, list[str]]:
     """
     Convert a single file using ffmpeg. Writes to a temporary file inside `out_dir`
     and atomically renames to the final output on success.
@@ -183,11 +191,7 @@ def convert_file(src: Path, out_dir: Path, opts) -> Tuple[bool, str, Path, List[
     tmp_out = final_out.with_name(final_out.stem + ".tmp" + final_out.suffix)
 
     # 2) Build ffmpeg command (write directly to tmp_out in the CORRECT folder)
-    v_codec = DEFAULTS.video_codec_h265 if getattr(opts, "hevc", False) else DEFAULTS.video_codec_h264
-    crf = opts.crf if opts.crf is not None else (DEFAULTS.crf_h265 if getattr(opts, "hevc", False) else DEFAULTS.crf_h264)
-    a_bitrate = DEFAULTS.audio_bitrate
-
-    # Probe to know if scaling is needed
+    # (quality knobs calculados mais abaixo ao montar cmd)
     try:
         info = ffprobe_info(src)
     except Exception as e:
@@ -201,7 +205,10 @@ def convert_file(src: Path, out_dir: Path, opts) -> Tuple[bool, str, Path, List[
     requested = getattr(opts, "audio_track", None)  # vindo de --audio-track
     if requested is not None and (requested < 0 or requested >= audio_count):
         chosen_audio = 0
-        print(f"  ⚠️  Requested audio track {requested} not available (found {audio_count}). Falling back to 0.")
+        print(
+            f"  ⚠️  Requested audio track {requested} not available "
+            f"(found {audio_count}). Falling back to 0."
+        )
     else:
         chosen_audio = requested if requested is not None else 0
 

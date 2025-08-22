@@ -5,6 +5,5 @@ Later we will also add a setuptools entry point (jellyconv) to run as a CLI comm
 
 from .cli import run_cli
 
-
 if __name__ == "__main__":
     raise SystemExit(run_cli())

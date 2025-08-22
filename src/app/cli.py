@@ -7,25 +7,28 @@ Changes:
 - Prints per-file duration and OK/ERR
 - Final summary with report locations
 """
-import re
 import argparse
+import re
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
-from typing import List, Tuple
 
 from .config import DEFAULTS
 from .converter import ConvertOptions, convert_file
-from .reporting import FileReport, Reporter
 from .ffmpeg_utils import (
-    human_size, ffprobe_info, list_subtitle_streams, sub_short_desc,
-    is_sdh_sub, is_text_sub, default_sub_ext,
-    lang_pretty, supports_color, color
+    color,
+    ffprobe_info,
+    human_size,
+    is_sdh_sub,
+    lang_pretty,
+    list_subtitle_streams,
+    supports_color,
 )
-
-from dataclasses import replace
 from .filename_infer import infer_title_and_year
 from .jellyfin_naming import movie_filename, movie_folder
+from .reporting import FileReport, Reporter
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Video converter (FFmpeg backend) — Talkative UX")
@@ -44,9 +47,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--year", type=int, help="Year for metadata and filename")
     p.add_argument("--interactive", "-t", action="store_true", help="Ask for title/year if missing")
     p.add_argument("--recursive", "-r", action="store_true", help="Recurse into subdirectories")
-    p.add_argument("--dry-run", action="store_true", default=False, help="Only print ffmpeg command")
+    p.add_argument(
+        "--dry-run", 
+        action="store_true", 
+        default=False, 
+        help="Only print ffmpeg command"
+    )
     p.add_argument("--overwrite", action="store_true", help="Allow overwriting outputs")
-    p.add_argument("--skip-existing", action="store_true", help="Skip when expected output already exists")
+    p.add_argument(
+        "--skip-existing", 
+        action="store_true", 
+        help="Skip when expected output already exists"
+    )
     p.add_argument("--no-ask-audio", action="store_true",
                help="Do not ask which audio track to use (default asks on TTY when multiple)")
     p.add_argument(
@@ -64,15 +76,27 @@ def parse_args() -> argparse.Namespace:
                help="Show full ffmpeg logs (and progress bar when possible)")
 
     # copy policies (mantemos simples)
-    p.add_argument("--copy-audio-when", choices=["aac", "never"], default="aac", help="Copy audio when AAC")
+    p.add_argument(
+        "--copy-audio-when", 
+        choices=["aac", "never"], 
+        default="aac", 
+        help="Copy audio when AAC"
+    )
     p.add_argument("--no-copy-subs", action="store_true", help="Disable subtitle copy/convert")
 
     p.add_argument("--extract-subs", action="store_true",
                help="Detect and extract embedded subtitles to files")
     p.add_argument("--subs-out", type=Path, default=None,
                help="Directory to write extracted subtitles (default: alongside output video)")
-    p.add_argument("--subs-select", type=str, default=None,
-               help="Comma-separated subtitle stream indexes to extract (or 'all'). If omitted, non-SDH are preselected and you can confirm/edit interactively.")
+    p.add_argument(
+        "--subs-select", 
+        type=str, 
+        default=None,
+        help=(
+            "Comma-separated subtitle stream indexes to extract (or 'all')."
+            "If omitted, non-SDH are preselected and you can confirm/edit interactively."
+        ),
+    )
     p.add_argument("--no-ask-subs", action="store_true",
                help="Do not prompt for subtitle selection; use --subs-select or default non-SDH")
 
@@ -90,11 +114,11 @@ def ask_if_needed(args: argparse.Namespace) -> None:
         args.year = int(y) if y.isdigit() else None
 
 
-def iter_inputs(input_path: Path, recursive: bool) -> List[Path]:
+def iter_inputs(input_path: Path, recursive: bool) -> list[Path]:
     if input_path.is_file():
         return [input_path]
     exts = (".mp4", ".mkv", ".avi", ".mov")
-    files: List[Path] = []
+    files: list[Path] = []
     if recursive:
         for ext in exts:
             files.extend(input_path.rglob(f"*{ext}"))
@@ -193,7 +217,10 @@ def prompt_subs_choice(streams: list[dict], preselect: list[int]) -> list[int]:
         sdh = "yes" if is_sdh_sub(s) else "no"
         lang_col = f"{lang_pretty(lang, flags=use_flags)} ({lang.upper()})"
         mark = "*" if i in preselect else " "
-        line = f"{mark}{i:>2}   {lang_col:<28} {codec:<8} {str(ch):<2} {forced:<6} {sdh:<3}  {title}"
+        line = (
+            f"{mark}{i:>2}   {lang_col:<28} {codec:<8} {str(ch):<2} "
+            f"{forced:<6} {sdh:<3}  {title}"
+        )
         print(color(line, "1;33") if (use_color and i in preselect) else line)
 
     default_str = ",".join(str(i) for i in preselect) if preselect else "none"
@@ -229,7 +256,6 @@ def run_cli() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Build opts
-    copy_when = None if args.copy_audio_when == "never" else "aac"
     opts = ConvertOptions(
         hevc=bool(args.hevc),
         crf=args.crf,
@@ -258,7 +284,7 @@ def run_cli() -> int:
                 return 0
 
     # Header
-    print(f"🎬 Starting conversion")
+    print("🎬 Starting conversion")
     print(f"• Input:     {args.input}")
     print(f"• Output:    {out_dir}")
     print(f"• Files:     {len(inputs)}")
@@ -266,9 +292,9 @@ def run_cli() -> int:
     if opts.max_height:
         print(f"• Max height: {opts.max_height}")
     if opts.hevc:
-        print(f"• Codec:     H.265 (libx265)")
+        print("• Codec:     H.265 (libx265)")
     else:
-        print(f"• Codec:     H.264 (libx264)")
+        print("• Codec:     H.264 (libx264)")
     print("-" * 60)
 
     if inputs:
@@ -303,7 +329,8 @@ def run_cli() -> int:
                 if len(audio_streams) == 1:
                     chosen_audio_track = 0
                     if args.verbose:
-                        print(f"  ℹ️  Single audio track detected → using index 0 ({_describe_audio_stream(audio_streams[0])})")
+                        desc0 = _describe_audio_stream(audio_streams[0])
+                        print(f"  ℹ️  Single audio track detected → using index 0 ({desc0})")
                 elif len(audio_streams) >= 2:
                     # Regra: pergunta se estivermos num TTY e usuário não bloqueou com --no-ask-audio
                     if interactive_tty and not args.no_ask_audio:
@@ -312,7 +339,8 @@ def run_cli() -> int:
                         # Não interativo: cai no índice 0 de forma determinística
                         chosen_audio_track = 0
                     if args.verbose and chosen_audio_track is not None:
-                        print(f"  ℹ️  Chosen audio index: {chosen_audio_track} ({_describe_audio_stream(audio_streams[chosen_audio_track])})")
+                        chdesc = _describe_audio_stream(audio_streams[chosen_audio_track])
+                        print(f"  ℹ️  Chosen audio index: {chosen_audio_track} ({chdesc})")
                 else:
                     # padrão: usa 0 se não pedir escolha
                     chosen_audio_track = 0 if audio_streams else 0
@@ -335,7 +363,8 @@ def run_cli() -> int:
             )
             if expected_out.exists():
                 skipped_count += 1
-                print(f"[{idx}/{total}] ⏭️  Skipping: {src.name} → {expected_out.relative_to(out_dir)} (já existe)")
+                rel = expected_out.relative_to(out_dir)
+                print(f"[{idx}/{total}] ⏭️  Skipping: {src.name} → {rel} (já existe)")
                 reporter.add(
                     FileReport(
                         input_path=str(src),
@@ -383,7 +412,11 @@ def run_cli() -> int:
                             picks = suggested  # não-interativo: tarefa limpa
                     # decide pasta: por padrão AO LADO do vídeo de saída (melhor para players)
                     subs_dir = args.subs_out or target_dir
-                    base_name = movie_filename(file_title, file_year, (args.container or DEFAULTS.container))
+                    base_name = movie_filename(
+                        file_title, 
+                        file_year, 
+                        (args.container or DEFAULTS.container)
+                    )
                     base_name = Path(base_name).with_suffix("").name  # sem extensão
                     # chama extração
                     from .converter import extract_subs  # import leve, evita ciclo
@@ -416,7 +449,8 @@ def run_cli() -> int:
                     out_size = outpath.stat().st_size
             except Exception:
                 out_size = 0
-            print(f" ✅ Concluído em {duration:.1f}s  →  {outpath.relative_to(out_dir)}  ({human_size(out_size)})")
+            rel_out = outpath.relative_to(out_dir)
+            print(f" ✅ Concluído em {duration:.1f}s  →  {rel_out}  ({human_size(out_size)})")
             status = "dry-run" if opts.dry_run else "success"
             reporter.add(FileReport(
                 input_path=str(src),
@@ -447,7 +481,8 @@ def run_cli() -> int:
     reporter.write()
     elapsed = time.time() - start_all
     print("🏁 Finalizado")
-    print(f"• Sucesso: {ok_count}  • Falhas: {err_count}" + (f"  • Pulados: {skipped_count}" if skipped_count else ""))
+    skipped_str = f"  • Pulados: {skipped_count}" if skipped_count else ""
+    print(f"• Sucesso: {ok_count}  • Falhas: {err_count}{skipped_str}")
     print(f"• Tempo total: {elapsed:.1f}s")
     print(f"• Relatórios: {DEFAULTS.report_csv}  |  {DEFAULTS.report_json}")
     return 0

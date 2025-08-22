@@ -3,11 +3,10 @@ Build metadata dicts to pass to ffmpeg (-metadata key=value).
 We keep keys simple and widely recognized: title, date, year.
 """
 
-from typing import Dict, Optional
 
 
-def build_metadata(title: Optional[str], year: Optional[int]) -> Dict[str, str]:
-    meta: Dict[str, str] = {}
+def build_metadata(title: str | None, year: int | None) -> dict[str, str]:
+    meta: dict[str, str] = {}
     if title:
         meta["title"] = title
     if year:

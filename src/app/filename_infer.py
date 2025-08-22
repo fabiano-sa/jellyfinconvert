@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional, Tuple, List
 
 # Acceptable year pattern (not part of a longer number)
 YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
@@ -70,11 +69,11 @@ def _is_stop_tag(tok: str) -> bool:
     return t in STOP_TAGS
 
 
-def _clean_tokens(tokens: List[str]) -> List[str]:
+def _clean_tokens(tokens: list[str]) -> list[str]:
     """
     Remove empty tokens and obvious junk (e.g., extra brackets).
     """
-    out: List[str] = []
+    out: list[str] = []
     for t in tokens:
         t = t.strip("[](){}")
         if not t:
@@ -87,7 +86,7 @@ def _collapse_spaces(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def infer_title_and_year(filename: str) -> Tuple[str, Optional[int]]:
+def infer_title_and_year(filename: str) -> tuple[str, int | None]:
     """
     Infer a human-friendly title and (optionally) a year from a release filename.
 
@@ -101,18 +100,16 @@ def infer_title_and_year(filename: str) -> Tuple[str, Optional[int]]:
 
     # 2) Find year anywhere in the stem (we'll also use it as a stop signal)
     m = YEAR_RE.search(stem)
-    year: Optional[int] = int(m.group(1)) if m else None
+    year: int | None = int(m.group(1)) if m else None
 
     # 3) Tokenize by common separators (., _, -, space)
     tokens = _clean_tokens(TOKEN_SPLIT_RE.split(stem))
 
     # 4) Accumulate title tokens until a stop tag or after the year is seen
-    title_tokens: List[str] = []
-    seen_year = False
+    title_tokens: list[str] = []
     for tok in tokens:
         # If we hit the year, mark and don't include it as a title token
         if YEAR_RE.fullmatch(tok or ""):
-            seen_year = True
             # Once year is seen, usually the rest are tags; we break here.
             break
 

@@ -6,7 +6,6 @@ Later we can extend this module to support series (SxxEyy) or other naming rules
 """
 
 from pathlib import Path
-from typing import Optional
 
 
 def sanitize_name(name: str) -> str:
@@ -16,7 +15,7 @@ def sanitize_name(name: str) -> str:
     return " ".join(name.replace("/", "-").split())
 
 
-def movie_filename(title: Optional[str], year: Optional[int], container: str) -> str:
+def movie_filename(title: str | None, year: int | None, container: str) -> str:
     """
     Build a Jellyfin-friendly filename like: "Movie Title (2024).mp4"
     """
@@ -25,7 +24,7 @@ def movie_filename(title: Optional[str], year: Optional[int], container: str) ->
     return f"{title_part}{year_part}.{container.lower()}"
 
 
-def movie_folder(title: Optional[str], year: Optional[int]) -> Path:
+def movie_folder(title: str | None, year: int | None) -> Path:
     """Return folder name 'Title (Year)' or 'Title' if year is missing."""
     title_part = sanitize_name(title or "Unknown Title")
     year_part = f" ({year})" if year else ""

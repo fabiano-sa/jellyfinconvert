@@ -6,10 +6,10 @@ across the codebase. You can change presets, codecs, CRF values, etc. here
 and other modules will pick them up.
 """
 import os
-from dotenv import load_dotenv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -32,7 +32,7 @@ class Defaults:
     audio_bitrate: str = "192k"
 
     # Optional resolution cap (e.g., 1080 for 1080p)
-    max_height: Optional[int] = None
+    max_height: int | None = None
 
     # Logging & reports
     log_dir: Path = Path("logs")

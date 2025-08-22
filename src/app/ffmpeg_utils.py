@@ -5,10 +5,13 @@ Added: run_streaming() to print ffmpeg stderr live (progress/stats)
 so the CLI is not silent during long encodes.
 """
 
-import json, subprocess, re, sys, time
-from datetime import timedelta
+import json
+import re
+import subprocess
+import sys
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Regex para capturar "time=HH:MM:SS.xx"
 TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
@@ -28,7 +31,7 @@ def get_duration(path: str) -> float:
     )
     try:
         return float(result.stdout.strip())
-    except:
+    except (ValueError, TypeError):
         return 0.0
 
 
@@ -36,7 +39,7 @@ class FFmpegError(RuntimeError):
     """Raised when ffprobe/ffmpeg fails."""
 
 
-def run(cmd: List[str]) -> Tuple[int, str, str]:
+def run(cmd: list[str]) -> tuple[int, str, str]:
     """
     Run a command and return (exit_code, stdout, stderr).
     Kept for places where we don't need live output.
@@ -46,7 +49,7 @@ def run(cmd: List[str]) -> Tuple[int, str, str]:
     return proc.returncode, out, err
 
 
-def run_streaming(cmd: List[str], duration: float = 0.0, verbose: bool = False) -> int:
+def run_streaming(cmd: list[str], duration: float = 0.0, verbose: bool = False) -> int:
     """
     Run ffmpeg and stream stderr. Se `duration > 0`, mostra barra de progresso.
     - verbose=False: mostra barra (se der) OU logs crus se não houver duração.
@@ -97,12 +100,14 @@ def run_streaming(cmd: List[str], duration: float = 0.0, verbose: bool = False) 
 
     ret = proc.wait()
     if duration > 0:
-        sys.stderr.write(f"\r[{'█'*bar_len}] 100.0%  {format_time(duration)} / {format_time(duration)}\n")
+        bar = "█" * bar_len
+        total = format_time(duration)
+        sys.stderr.write(f"\r[{bar}] 100.0%  {total} / {total}\n")
         sys.stderr.flush()
     return ret
 
 
-def ffprobe_info(path: Path) -> Dict[str, Any]:
+def ffprobe_info(path: Path) -> dict[str, Any]:
     """
     Query media info using ffprobe and return a JSON dict with streams/format.
     """
@@ -131,7 +136,7 @@ def human_size(bytes_: int) -> str:
         size /= 1024
 
 
-def build_scale_filter(max_height: Optional[int], streams: Dict[str, Any]) -> Optional[str]:
+def build_scale_filter(max_height: int | None, streams: dict[str, Any]) -> str | None:
     """
     Decide whether we need a scale filter, based on the max height constraint.
     """
@@ -150,7 +155,7 @@ def build_scale_filter(max_height: Optional[int], streams: Dict[str, Any]) -> Op
 
 # --- Subtitles helpers -------------------------------------------------------
 
-def list_subtitle_streams(info: Dict[str, Any]) -> list[dict]:
+def list_subtitle_streams(info: dict[str, Any]) -> list[dict]:
     """Return only subtitle streams from ffprobe JSON."""
     return [s for s in info.get("streams", []) if s.get("codec_type") == "subtitle"]
 
@@ -229,26 +234,33 @@ LANG_NAMES = {
 }
 
 def flag_emoji(lang: str) -> str:
-    l = (lang or "").lower()
-    # mapeia alguns casos comuns; 'und' não tem bandeira
-    if l in {"pt", "por"}: return "🇵🇹"
-    if l in {"pt-br", "pt_br", "por-br"}: return "🇧🇷"
-    if l in {"en", "eng"}: return "🇺🇸"
-    if l in {"es", "spa"}: return "🇪🇸"
-    if l in {"ja", "jpn"}: return "🇯🇵"
-    if l in {"fr", "fra", "fre"}: return "🇫🇷"
-    if l in {"de", "deu", "ger"}: return "🇩🇪"
+    code = (lang or "").lower()
+    if code in {"pt", "por"}:
+        return "🇵🇹"
+    if code in {"pt-br", "pt_br", "por-br"}:
+        return "🇧🇷"
+    if code in {"en", "eng"}:
+        return "🇺🇸"
+    if code in {"es", "spa"}:
+        return "🇪🇸"
+    if code in {"ja", "jpn"}:
+        return "🇯🇵"
+    if code in {"fr", "fra", "fre"}:
+        return "🇫🇷"
+    if code in {"de", "deu", "ger"}:
+        return "🇩🇪"
     return ""
 
 def lang_pretty(lang: str, *, flags: bool = True) -> str:
-    l = (lang or "").lower()
-    name = LANG_NAMES.get(l, l.upper() if l else "UND")
-    flg = flag_emoji(l) if flags else ""
+    code = (lang or "").lower()
+    name = LANG_NAMES.get(code, code.upper() if code else "UND")
+    flg = flag_emoji(code) if flags else ""
     return f"{flg} {name}" if flg else name
 
 def supports_color() -> bool:
     try:
-        import os, sys
+        import os
+        import sys
         return sys.stdout.isatty() and (os.environ.get("TERM") not in (None, "dumb"))
     except Exception:
         return False

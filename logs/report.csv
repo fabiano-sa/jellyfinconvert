@@ -1,0 +1,2 @@
+input_path,output_path,status,error,duration_sec,input_size,input_size_human,output_size,output_size_human,size_diff,size_diff_human
+videos/input/Cyberpunk Edgerunners  (2012).mkv,videos/output/Cyberpunk Edgerunners (2012)/Cyberpunk Edgerunners (2012).mp4,success,,190.110,305538343,291.38 MB,426405893,406.65 MB,120867550,+115.27 MB

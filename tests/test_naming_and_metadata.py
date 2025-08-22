@@ -1,4 +1,4 @@
-from app.jellyfin_naming import movie_filename, sanitize_name
+from app.jellyfin_naming import movie_filename
 from app.metadata import build_metadata
 
 

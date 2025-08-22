@@ -1,0 +1,2 @@
+[console_scripts]
+jfconv = app.cli:run_cli

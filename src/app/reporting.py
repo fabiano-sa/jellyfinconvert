@@ -7,9 +7,8 @@ In Milestone 1, we fill basic fields (even if --dry-run).
 
 import csv
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List
 
 from .ffmpeg_utils import human_size
 
@@ -51,7 +50,7 @@ class Reporter:
     def __init__(self, csv_path: Path, json_path: Path) -> None:
         self.csv_path = csv_path
         self.json_path = json_path
-        self.rows: List[FileReport] = []
+        self.rows: list[FileReport] = []
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     def add(self, row: FileReport) -> None:
