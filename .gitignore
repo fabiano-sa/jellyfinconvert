@@ -7,8 +7,12 @@ __pycache__/
 .ruff_cache/
 .env
 
-# ignore runtime stuff but keep .gitkeep
+# runtime
 logs/*
 !logs/.gitkeep
 videos/*
 !videos/.gitkeep
+
+# ferramentas/mirrors locais
+bfg.jar
+*.git/
