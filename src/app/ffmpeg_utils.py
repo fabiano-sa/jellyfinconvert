@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 # Regex para capturar "time=HH:MM:SS.xx"
 TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
@@ -152,7 +152,7 @@ def human_size(bytes_: int) -> str:
     return f"{size:.2f} B"
 
 
-def build_scale_filter(max_height: Optional[int], streams: Dict[str, Any]) -> Optional[str]:
+def build_scale_filter(max_height: int | None, streams: dict[str, Any]) -> str | None:
     """
     Decide whether we need a scale filter, based on the max height constraint.
     Returns a ffmpeg scale filter string (e.g., "scale=-2:1080") or None.

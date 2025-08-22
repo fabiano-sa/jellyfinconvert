@@ -8,9 +8,6 @@ Changes:
 - Final summary with report locations
 """
 
-from dotenv import load_dotenv
-load_dotenv(".env.local", override=True)  # valores reais, privados
-load_dotenv()  # também carrega .env (se existir), como fallback
 
 import argparse
 import re
@@ -18,6 +15,8 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 from app.config import DEFAULTS
 from app.converter import ConvertOptions, convert_file
@@ -34,6 +33,8 @@ from app.filename_infer import infer_title_and_year
 from app.jellyfin_naming import movie_filename, movie_folder
 from app.reporting import FileReport, Reporter
 
+load_dotenv(".env.local", override=True)  # valores reais, privados
+load_dotenv()  # também carrega .env (se existir), como fallback
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Video converter (FFmpeg backend) — Talkative UX")
