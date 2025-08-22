@@ -86,8 +86,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--organize",
         action="store_true",
-        help="Place outputs into 'Title (Year)/Title (Year).ext' folders",
+        default=True,
+       help="Place outputs into 'Title (Year)/Title (Year).ext' folders (default: on)",
     )
+
     p.add_argument(
         "--ask-missing",
         action="store_true",
