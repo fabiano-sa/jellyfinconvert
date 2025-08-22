@@ -29,8 +29,12 @@ from .jellyfin_naming import movie_filename, movie_folder
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Video converter (FFmpeg backend) — Talkative UX")
-    p.add_argument("--input", "-i", type=Path, required=True, help="Input file or directory")
-    p.add_argument("--output", "-o", type=Path, default=Path("videos/output"), help="Output directory")
+
+    p.add_argument("--input", "-i", type=Path, default=DEFAULTS.default_input_dir,
+        help=f"Input file or directory (default: {DEFAULTS.default_input_dir})")
+    p.add_argument("--output", "-o", type=Path, default=DEFAULTS.default_output_dir,
+        help=f"Output directory (default: {DEFAULTS.default_output_dir})")
+
     p.add_argument("--container", choices=["mp4", "mkv"], help="Output container (default: mp4)")
     p.add_argument("--hevc", action="store_true", help="Use H.265 (libx265) instead of H.264")
     p.add_argument("--crf", type=int, help="CRF value (lower = better quality)")
@@ -211,7 +215,12 @@ def run_cli() -> int:
     ask_if_needed(args)
     interactive_tty = sys.stdin.isatty()
 
+    if not args.input.exists():
+        print(f"⚠️  Input path not found: {args.input}")
+        print("   Dica: ajuste em .env (JFCVT_INPUT_DIR) ou passe --input.")
+        return 1
     inputs = iter_inputs(args.input, bool(args.recursive))
+
     if not inputs:
         print("⚠️ No input files found.")
         return 0
