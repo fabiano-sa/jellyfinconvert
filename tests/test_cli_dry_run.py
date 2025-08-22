@@ -12,7 +12,21 @@ def test_cli_dry_run(tmp_path: Path):
     out_dir.mkdir()
 
     # run the module with --dry-run (default is True in M1)
-    cmd = [sys.executable, "-m", "src.app.main", "-i", str(tmp_path), "-o", str(out_dir), "--container", "mp4", "--title", "Hello", "--year", "2024"]
+    cmd = [
+        sys.executable,
+        "-m",
+        "src.app.main",
+        "-i",
+        str(tmp_path),
+        "-o",
+        str(out_dir),
+        "--container",
+        "mp4",
+        "--title",
+        "Hello",
+        "--year",
+        "2024",
+    ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
 
     assert proc.returncode == 0

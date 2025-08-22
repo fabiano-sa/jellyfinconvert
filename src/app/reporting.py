@@ -17,7 +17,7 @@ from .ffmpeg_utils import human_size
 class FileReport:
     input_path: str
     output_path: str
-    status: str            # "success" | "fail" | "dry-run"
+    status: str  # "success" | "fail" | "dry-run"
     error: str
     duration_sec: float
     input_size: int

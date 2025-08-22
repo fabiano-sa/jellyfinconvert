@@ -40,18 +40,20 @@ class ConvertOptions:
     - max_height (scale filter applied when needed)
     - dry_run: if True, we only print the command
     """
-    hevc: bool = False                 # True => H.265, False => H.264
-    crf: int | None = None          # if None, use default by codec
-    bitrate: str | None = None      # overrides CRF if set
-    max_height: int | None = None   # e.g., 1080 => limit to 1080p
-    container: str | None = None    # "mp4" or "mkv"
-    preset: str | None = None       # ffmpeg preset
+
+    hevc: bool = False  # True => H.265, False => H.264
+    crf: int | None = None  # if None, use default by codec
+    bitrate: str | None = None  # overrides CRF if set
+    max_height: int | None = None  # e.g., 1080 => limit to 1080p
+    container: str | None = None  # "mp4" or "mkv"
+    preset: str | None = None  # ffmpeg preset
     title: str | None = None
     year: int | None = None
-    dry_run: bool = False              # M2 default: execute unless user asks for dry-run
+    dry_run: bool = False  # M2 default: execute unless user asks for dry-run
     verbose: bool = False
     audio_track: int | None = None
     no_copy_subs: bool = False
+
 
 def _target_video_codec(hevc: bool, defaults: Defaults) -> str:
     return defaults.video_codec_h265 if hevc else defaults.video_codec_h264
@@ -76,8 +78,10 @@ def build_ffmpeg_cmd(
     if opts.bitrate:
         video_quality_args = ["-b:v", opts.bitrate]
     else:
-        crf = opts.crf if opts.crf is not None else (
-            defaults.crf_h265 if opts.hevc else defaults.crf_h264
+        crf = (
+            opts.crf
+            if opts.crf is not None
+            else (defaults.crf_h265 if opts.hevc else defaults.crf_h264)
         )
         video_quality_args = ["-crf", str(crf)]
 
@@ -91,7 +95,7 @@ def build_ffmpeg_cmd(
         # Keep aspect ratio: scale=-2:MAX (already decided upstream)
         filter_args = ["-vf", scale_filter]
 
-   # Mapas de streams (vídeo 0, áudio escolhido)
+    # Mapas de streams (vídeo 0, áudio escolhido)
     map_args: list[str] = ["-map", "0:v:0", "-map", f"0:a:{audio_map_index}"]
 
     # Subtítulos: por padrão não copiar para MP4 (PGS não é suportado) ou quando no_copy_subs=True
@@ -104,15 +108,21 @@ def build_ffmpeg_cmd(
         "ffmpeg",
         "-y",  # allow overwrite (we'll add policies later)
         "-hide_banner",
-        "-loglevel", "info",
-        "-i", str(input_path),
+        "-loglevel",
+        "info",
+        "-i",
+        str(input_path),
         *map_args,
         *filter_args,
-        "-c:v", vcodec,
-        "-preset", preset,
+        "-c:v",
+        vcodec,
+        "-preset",
+        preset,
         *video_quality_args,
-        "-c:a", defaults.audio_codec,
-        "-b:a", defaults.audio_bitrate,
+        "-c:a",
+        defaults.audio_codec,
+        "-b:a",
+        defaults.audio_bitrate,
         *meta_args,
     ]
 
@@ -124,7 +134,10 @@ def build_ffmpeg_cmd(
     cmd += [str(output_path)]
     return cmd
 
-def _build_sub_extraction_cmd(src: Path, sub_index: int, out_path: Path, codec_name: str) -> list[str]:
+
+def _build_sub_extraction_cmd(
+    src: Path, sub_index: int, out_path: Path, codec_name: str
+) -> list[str]:
     """
     Build ffmpeg command to extract a subtitle stream:
     - For text codecs ⇒ convert to SRT: -map 0:s:i -c:s srt
@@ -132,16 +145,25 @@ def _build_sub_extraction_cmd(src: Path, sub_index: int, out_path: Path, codec_n
     """
     is_text = is_text_sub(codec_name)
     cmd = [
-        "ffmpeg", "-y",
-        "-hide_banner", "-loglevel", "info",
-        "-i", str(src),
-        "-map", f"0:s:{sub_index}",
-        "-c:s", "srt" if is_text else "copy",
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "info",
+        "-i",
+        str(src),
+        "-map",
+        f"0:s:{sub_index}",
+        "-c:s",
+        "srt" if is_text else "copy",
         str(out_path),
     ]
     return cmd
 
-def extract_subs(src: Path, streams: list[dict], indexes: list[int], base_out_dir: Path, base_name: str) -> list[Path]:
+
+def extract_subs(
+    src: Path, streams: list[dict], indexes: list[int], base_out_dir: Path, base_name: str
+) -> list[Path]:
     """
     Extract selected subtitle streams. Returns list of generated files.
     base_name: e.g. 'Cyberpunk Edgerunners (2012)' to compose file names.
@@ -171,7 +193,6 @@ def extract_subs(src: Path, streams: list[dict], indexes: list[int], base_out_di
             # tenta explicar mínimamente
             print(f"  ⚠️  Failed to extract subtitle #{i} ({sub_short_desc(s)}).")
     return out_files
-
 
 
 def convert_file(src: Path, out_dir: Path, opts) -> tuple[bool, str, Path, list[str]]:

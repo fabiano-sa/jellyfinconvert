@@ -16,18 +16,29 @@ from typing import Any
 # Regex para capturar "time=HH:MM:SS.xx"
 TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
 
+
 def format_time(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
     return f"{h:02}:{m:02}:{s:02}"
 
+
 def get_duration(path: str) -> float:
     """Retorna a duração do arquivo em segundos via ffprobe"""
     result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", path],
-        capture_output=True, text=True
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
+        ],
+        capture_output=True,
+        text=True,
     )
     try:
         return float(result.stdout.strip())
@@ -56,8 +67,7 @@ def run_streaming(cmd: list[str], duration: float = 0.0, verbose: bool = False) 
     - verbose=True: mostra logs crus SEMPRE e, se houver duração, também a barra.
     """
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
     )
     assert proc.stderr is not None
     last_update = 0.0
@@ -113,9 +123,12 @@ def ffprobe_info(path: Path) -> dict[str, Any]:
     """
     cmd = [
         "ffprobe",
-        "-v", "error",
-        "-print_format", "json",
-        "-show_format", "-show_streams",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
         str(path),
     ]
     code, out, err = run(cmd)
@@ -153,13 +166,17 @@ def build_scale_filter(max_height: int | None, streams: dict[str, Any]) -> str |
         return f"scale=-2:{max_height}"
     return None
 
+
 # --- Subtitles helpers -------------------------------------------------------
+
 
 def list_subtitle_streams(info: dict[str, Any]) -> list[dict]:
     """Return only subtitle streams from ffprobe JSON."""
     return [s for s in info.get("streams", []) if s.get("codec_type") == "subtitle"]
 
+
 SDH_HINTS = {"sdh", "cc", "closed", "hearing", "impaired", "hi"}  # lowercased tokens
+
 
 def is_sdh_sub(stream: dict) -> bool:
     """Heurística: tenta identificar SDH/Closed Captions por tags/disposition/título."""
@@ -172,6 +189,7 @@ def is_sdh_sub(stream: dict) -> bool:
     # alguns lançamentos marcam SDH no título ou no language (ex.: "eng-sdh")
     haystack = f"{t_title} {t_lang}".lower()
     return any(h in haystack for h in SDH_HINTS)
+
 
 def sub_short_desc(s: dict) -> str:
     """Resumo para UI: [idx] lang=por | codec=ass | sdh/no | title=... | forced=yes/no"""
@@ -191,9 +209,11 @@ def sub_short_desc(s: dict) -> str:
         bits.append(f"title={title}")
     return " | ".join(bits)
 
+
 def is_text_sub(codec: str) -> bool:
     """Text-based codecs we can convert to SRT."""
     return codec.lower() in {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
+
 
 def default_sub_ext(codec: str) -> str:
     c = codec.lower()
@@ -211,27 +231,29 @@ def default_sub_ext(codec: str) -> str:
         return ".sub"  # pode gerar .sub + .idx dependendo do fonte
     return ".srt"
 
+
 # --- UI helpers for subtitles ------------------------------------------------
 
 LANG_NAMES = {
     "und": "Undetermined",
     "eng": "English",
-    "en":  "English",
+    "en": "English",
     "por": "Portuguese",
-    "pt":  "Portuguese",
+    "pt": "Portuguese",
     "pt-br": "Portuguese (Brazil)",
     "spa": "Spanish",
-    "es":  "Spanish",
+    "es": "Spanish",
     "jpn": "Japanese",
-    "ja":  "Japanese",
+    "ja": "Japanese",
     "ita": "Italian",
     "deu": "German",
     "ger": "German",
-    "de":  "German",
+    "de": "German",
     "fra": "French",
     "fre": "French",
-    "fr":  "French",
+    "fr": "French",
 }
+
 
 def flag_emoji(lang: str) -> str:
     code = (lang or "").lower()
@@ -251,19 +273,23 @@ def flag_emoji(lang: str) -> str:
         return "🇩🇪"
     return ""
 
+
 def lang_pretty(lang: str, *, flags: bool = True) -> str:
     code = (lang or "").lower()
     name = LANG_NAMES.get(code, code.upper() if code else "UND")
     flg = flag_emoji(code) if flags else ""
     return f"{flg} {name}" if flg else name
 
+
 def supports_color() -> bool:
     try:
         import os
         import sys
+
         return sys.stdout.isatty() and (os.environ.get("TERM") not in (None, "dumb"))
     except Exception:
         return False
+
 
 def color(s: str, code: str) -> str:
     # code: e.g. "1;36" (bold cyan), "1;33" (bold yellow)

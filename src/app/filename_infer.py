@@ -26,24 +26,73 @@ TOKEN_SPLIT_RE = re.compile(r"[.\s_\-]+")
 
 # Stopword/tag sets (lowercased) used to stop capturing title tokens
 RES_TAGS = {
-    "480p", "576p", "720p", "1080p", "1440p", "2160p", "4k", "8k",
+    "480p",
+    "576p",
+    "720p",
+    "1080p",
+    "1440p",
+    "2160p",
+    "4k",
+    "8k",
 }
 SOURCE_TAGS = {
-    "bluray", "bdrip", "brrip", "web", "webrip", "web-dl", "webdl", "hdrip",
-    "dvdrip", "dvd", "hdtv", "remux", "blu-ray",
+    "bluray",
+    "bdrip",
+    "brrip",
+    "web",
+    "webrip",
+    "web-dl",
+    "webdl",
+    "hdrip",
+    "dvdrip",
+    "dvd",
+    "hdtv",
+    "remux",
+    "blu-ray",
 }
 CODEC_TAGS = {
-    "x264", "x265", "h264", "h265", "hevc", "av1", "xvid", "divx",
+    "x264",
+    "x265",
+    "h264",
+    "h265",
+    "hevc",
+    "av1",
+    "xvid",
+    "divx",
 }
 AUDIO_TAGS = {
-    "aac", "ac3", "eac3", "ddp", "dd+", "dts", "truehd", "atmos", "mp3", "flac",
+    "aac",
+    "ac3",
+    "eac3",
+    "ddp",
+    "dd+",
+    "dts",
+    "truehd",
+    "atmos",
+    "mp3",
+    "flac",
 }
 EDITION_TAGS = {
-    "unrated", "extended", "director", "cut", "remastered", "proper", "repack",
+    "unrated",
+    "extended",
+    "director",
+    "cut",
+    "remastered",
+    "proper",
+    "repack",
     "theatrical",
 }
 LANG_TAGS = {
-    "multi", "dual", "ita", "lat", "esp", "eng", "pt", "pt-br", "br", "subs",
+    "multi",
+    "dual",
+    "ita",
+    "lat",
+    "esp",
+    "eng",
+    "pt",
+    "pt-br",
+    "br",
+    "subs",
 }
 
 STOP_TAGS = RES_TAGS | SOURCE_TAGS | CODEC_TAGS | AUDIO_TAGS | EDITION_TAGS | LANG_TAGS
