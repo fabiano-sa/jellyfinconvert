@@ -10,7 +10,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .ffmpeg_utils import human_size
+from app.ffmpeg_utils import human_size
 
 
 @dataclass

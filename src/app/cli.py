@@ -15,9 +15,9 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from .config import DEFAULTS
-from .converter import ConvertOptions, convert_file
-from .ffmpeg_utils import (
+from app.config import DEFAULTS
+from app.converter import ConvertOptions, convert_file
+from app.ffmpeg_utils import (
     color,
     ffprobe_info,
     human_size,
@@ -26,9 +26,9 @@ from .ffmpeg_utils import (
     list_subtitle_streams,
     supports_color,
 )
-from .filename_infer import infer_title_and_year
-from .jellyfin_naming import movie_filename, movie_folder
-from .reporting import FileReport, Reporter
+from app.filename_infer import infer_title_and_year
+from app.jellyfin_naming import movie_filename, movie_folder
+from app.reporting import FileReport, Reporter
 
 
 def parse_args() -> argparse.Namespace:
@@ -304,7 +304,7 @@ def run_cli() -> int:
 
     # Skip-existing (baseado no nome final esperado)
     if args.skip_existing and not opts.dry_run and args.title:
-        cont = (args.container or DEFAULTS.container)
+        cont = args.container or DEFAULTS.container
         year_part = f" ({args.year})" if args.year else ""
         base_name = f"{args.title}{year_part}.{cont}"
         expected = out_dir / base_name

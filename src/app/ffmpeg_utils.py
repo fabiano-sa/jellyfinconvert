@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Optional, Dict, Any
 
 # Regex para capturar "time=HH:MM:SS.xx"
 TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
@@ -143,27 +143,44 @@ def human_size(bytes_: int) -> str:
     """
     units = ["B", "KB", "MB", "GB", "TB"]
     size = float(bytes_)
-    for u in units:
-        if size < 1024 or u == units[-1]:
+    for i, u in enumerate(units):
+        # retorna quando ficar abaixo de 1024 OU quando for a última unidade
+        if size < 1024 or i == len(units) - 1:
             return f"{size:.2f} {u}"
         size /= 1024
+    # fallback explícito (nunca deve chegar aqui, mas agrada o mypy)
+    return f"{size:.2f} B"
 
 
-def build_scale_filter(max_height: int | None, streams: dict[str, Any]) -> str | None:
+def build_scale_filter(max_height: Optional[int], streams: Dict[str, Any]) -> Optional[str]:
     """
     Decide whether we need a scale filter, based on the max height constraint.
+    Returns a ffmpeg scale filter string (e.g., "scale=-2:1080") or None.
     """
-    if not max_height:
+    # Sem limite → sem filtro
+    if max_height is None:
         return None
-    v = next((s for s in streams.get("streams", []) if s.get("codec_type") == "video"), None)
-    if not v:
+
+    # Pega o primeiro stream de vídeo
+    v = next(
+        (s for s in streams.get("streams", []) if s.get("codec_type") == "video"),
+        None,
+    )
+    if v is None:
         return None
+
+    # Tenta ler a altura
     try:
-        height = int(v.get("height", 0) or 0)
+        height_raw = v.get("height", 0) or 0
+        height = int(height_raw)
     except (TypeError, ValueError):
         height = 0
-    if height and height > max_height:
+
+    # Se passar do limite, aplica filtro mantendo AR
+    if height > max_height:
         return f"scale=-2:{max_height}"
+
+    # Caminho explícito para satisfazer o mypy
     return None
 
 

@@ -14,8 +14,8 @@ Not yet in M2 (we'll add in M3):
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import DEFAULTS, Defaults
-from .ffmpeg_utils import (
+from app.config import DEFAULTS, Defaults
+from app.ffmpeg_utils import (
     build_scale_filter,
     default_sub_ext,
     ffprobe_info,
@@ -25,8 +25,8 @@ from .ffmpeg_utils import (
     run_streaming,
     sub_short_desc,
 )
-from .jellyfin_naming import movie_filename
-from .metadata import build_metadata
+from app.jellyfin_naming import movie_filename
+from app.metadata import build_metadata
 
 
 @dataclass
@@ -195,7 +195,9 @@ def extract_subs(
     return out_files
 
 
-def convert_file(src: Path, out_dir: Path, opts) -> tuple[bool, str, Path, list[str]]:
+def convert_file(
+    src: Path, out_dir: Path, opts: "ConvertOptions"
+) -> tuple[bool, str, Path, list[str]]:
     """
     Convert a single file using ffmpeg. Writes to a temporary file inside `out_dir`
     and atomically renames to the final output on success.

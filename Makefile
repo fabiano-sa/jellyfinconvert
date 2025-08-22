@@ -51,7 +51,7 @@ lint:
 	. .venv/bin/activate && ruff check .
 
 type:
-	. .venv/bin/activate && mypy src
+	. .venv/bin/activate && MYPYPATH=src mypy src
 
 test:
 	. .venv/bin/activate && pytest -q
