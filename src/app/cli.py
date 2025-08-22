@@ -8,6 +8,10 @@ Changes:
 - Final summary with report locations
 """
 
+from dotenv import load_dotenv
+load_dotenv(".env.local", override=True)  # valores reais, privados
+load_dotenv()  # também carrega .env (se existir), como fallback
+
 import argparse
 import re
 import sys

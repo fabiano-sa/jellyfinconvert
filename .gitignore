@@ -5,7 +5,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.env
 
 # runtime
 logs/*
@@ -16,3 +15,8 @@ videos/*
 # ferramentas/mirrors locais
 bfg.jar
 *.git/
+
+# arquivos de ambiente
+.env            
+.env.local      
+!.env.example   
