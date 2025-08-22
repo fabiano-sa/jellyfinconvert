@@ -29,3 +29,17 @@ exclude = ["tests/"]
 addopts = "-q"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["app*"]
+
+[project.scripts]
+jfconv = "app.cli:run_cli"

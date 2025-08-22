@@ -18,7 +18,7 @@ from typing import Optional, Tuple, List
 from .config import DEFAULTS, Defaults
 from .jellyfin_naming import movie_filename
 from .metadata import build_metadata
-from .ffmpeg_utils import ffprobe_info, build_scale_filter, run, run_streaming, get_duration
+from .ffmpeg_utils import ffprobe_info, build_scale_filter, run, run_streaming, get_duration, is_text_sub, default_sub_ext, sub_short_desc, run
 
 
 @dataclass
@@ -42,15 +42,11 @@ class ConvertOptions:
     year: Optional[int] = None
     dry_run: bool = False              # M2 default: execute unless user asks for dry-run
     verbose: bool = False
-    audio_track: Optional[int] = None 
+    audio_track: Optional[int] = None
+    no_copy_subs: bool = False
 
 def _target_video_codec(hevc: bool, defaults: Defaults) -> str:
     return defaults.video_codec_h265 if hevc else defaults.video_codec_h264
-
-
-def _tmp_output_path(final_path: Path) -> Path:
-    # e.g., "Demo (2025).mp4" -> "Demo (2025).tmp.mp4"
-    return final_path.with_name(f"{final_path.stem}.tmp{final_path.suffix}")
 
 
 def build_ffmpeg_cmd(
@@ -59,6 +55,8 @@ def build_ffmpeg_cmd(
     scale_filter: Optional[str],
     opts: ConvertOptions,
     defaults: Defaults = DEFAULTS,
+    audio_map_index: int = 0,
+    include_sub_0_optional: bool = True,
 ) -> List[str]:
     """
     Build an ffmpeg command list based on options + decided scale filter.
@@ -85,12 +83,22 @@ def build_ffmpeg_cmd(
         # Keep aspect ratio: scale=-2:MAX (already decided upstream)
         filter_args = ["-vf", scale_filter]
 
+   # Mapas de streams (vídeo 0, áudio escolhido)
+    map_args: List[str] = ["-map", "0:v:0", "-map", f"0:a:{audio_map_index}"]
+
+    # Subtítulos: por padrão não copiar para MP4 (PGS não é suportado) ou quando no_copy_subs=True
+    ext = output_path.suffix.lower().lstrip(".")
+    can_copy_subs = (ext != "mp4") and include_sub_0_optional and (not opts.no_copy_subs)
+    if can_copy_subs:
+        map_args += ["-map", "0:s:0?"]
+
     cmd: List[str] = [
         "ffmpeg",
         "-y",  # allow overwrite (we'll add policies later)
         "-hide_banner",
         "-loglevel", "info",
         "-i", str(input_path),
+        *map_args,
         *filter_args,
         "-c:v", vcodec,
         "-preset", preset,
@@ -98,9 +106,64 @@ def build_ffmpeg_cmd(
         "-c:a", defaults.audio_codec,
         "-b:a", defaults.audio_bitrate,
         *meta_args,
-        str(output_path),
+    ]
+
+    # MP4: melhor para streaming (Jellyfin/web players)
+    ext = output_path.suffix.lower().lstrip(".")
+    if ext == "mp4":
+        cmd += ["-movflags", "+faststart"]
+
+    cmd += [str(output_path)]
+    return cmd
+
+def _build_sub_extraction_cmd(src: Path, sub_index: int, out_path: Path, codec_name: str) -> list[str]:
+    """
+    Build ffmpeg command to extract a subtitle stream:
+    - For text codecs ⇒ convert to SRT: -map 0:s:i -c:s srt
+    - For image codecs (PGS/DVD) ⇒ copy: -map 0:s:i -c:s copy
+    """
+    is_text = is_text_sub(codec_name)
+    cmd = [
+        "ffmpeg", "-y",
+        "-hide_banner", "-loglevel", "info",
+        "-i", str(src),
+        "-map", f"0:s:{sub_index}",
+        "-c:s", "srt" if is_text else "copy",
+        str(out_path),
     ]
     return cmd
+
+def extract_subs(src: Path, streams: list[dict], indexes: list[int], base_out_dir: Path, base_name: str) -> list[Path]:
+    """
+    Extract selected subtitle streams. Returns list of generated files.
+    base_name: e.g. 'Cyberpunk Edgerunners (2012)' to compose file names.
+    """
+    base_out_dir.mkdir(parents=True, exist_ok=True)
+    out_files: list[Path] = []
+    for i in indexes:
+        s = streams[i]
+        tags = s.get("tags") or {}
+        lang = (tags.get("language") or "und").lower()
+        title = tags.get("title") or ""
+        codec = s.get("codec_name") or "unknown"
+        ext = default_sub_ext(codec)
+        suffix_bits = [lang]
+        if title:
+            # evitar espaços/delimitar; limpa título simples
+            clean_title = " ".join(title.replace("/", "-").split())
+            suffix_bits.append(clean_title)
+        suffix = "." + ".".join([b for b in suffix_bits if b])
+        out_name = f"{base_name}{suffix}{ext}"
+        out_path = base_out_dir / out_name
+        cmd = _build_sub_extraction_cmd(src, i, out_path, codec)
+        code = run(cmd)[0]
+        if code == 0 and out_path.exists():
+            out_files.append(out_path)
+        else:
+            # tenta explicar mínimamente
+            print(f"  ⚠️  Failed to extract subtitle #{i} ({sub_short_desc(s)}).")
+    return out_files
+
 
 
 def convert_file(src: Path, out_dir: Path, opts) -> Tuple[bool, str, Path, List[str]]:
@@ -112,9 +175,11 @@ def convert_file(src: Path, out_dir: Path, opts) -> Tuple[bool, str, Path, List[
         (success, error_message, final_output_path, ffmpeg_cmd)
     """
 
-    # 1) Decide names/paths (FINAL and TMP *dentro* de out_dir)
+    # 1) Garante diretório e decide names/paths (FINAL e TMP *dentro* de out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     container = (opts.container or DEFAULTS.container).lower()
-    final_out = out_dir / movie_filename(opts.title, opts.year, container)
+    title = opts.title or src.stem
+    final_out = out_dir / movie_filename(title, opts.year, container)
     tmp_out = final_out.with_name(final_out.stem + ".tmp" + final_out.suffix)
 
     # 2) Build ffmpeg command (write directly to tmp_out in the CORRECT folder)
@@ -129,7 +194,6 @@ def convert_file(src: Path, out_dir: Path, opts) -> Tuple[bool, str, Path, List[
         return False, f"ffprobe failed: {e}", final_out, []
 
     scale = build_scale_filter(opts.max_height, info) if getattr(opts, "max_height", None) else None
-    vf = ["-vf", scale] if scale else []
 
     audio_streams = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
     audio_count = len(audio_streams)
@@ -141,33 +205,15 @@ def convert_file(src: Path, out_dir: Path, opts) -> Tuple[bool, str, Path, List[
     else:
         chosen_audio = requested if requested is not None else 0
 
-    map_args = [
-        "-map", "0:v:0",
-        "-map", f"0:a:{chosen_audio}",
-        "-map", "0:s:0?"  # legenda 0 se existir (opcional)
-    ]
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-hide_banner", "-loglevel", "info",
-        "-i", str(src),
-        *map_args,
-        "-c:v", v_codec, "-preset", DEFAULTS.preset,
-    ]
-    if getattr(opts, "bitrate", None):
-        cmd += ["-b:v", str(opts.bitrate)]
-    else:
-        cmd += ["-crf", str(crf)]
-
-    cmd += [
-        "-c:a", DEFAULTS.audio_codec, "-b:a", a_bitrate,
-        "-metadata", f"title={opts.title or ''}",
-    ]
-    if opts.year:
-        cmd += ["-metadata", f"date={opts.year}", "-metadata", f"year={opts.year}"]
-
-    cmd += vf
-    cmd += [str(tmp_out)]
+    cmd = build_ffmpeg_cmd(
+        input_path=src,
+        output_path=tmp_out,
+        scale_filter=scale,
+        opts=opts,
+        defaults=DEFAULTS,
+        audio_map_index=chosen_audio,
+        include_sub_0_optional=True,
+    )
 
     # 3) Dry-run? Só retorna o plano
     if getattr(opts, "dry_run", False):

@@ -7,8 +7,9 @@ Changes:
 - Prints per-file duration and OK/ERR
 - Final summary with report locations
 """
-
+import re
 import argparse
+import sys
 import time
 from pathlib import Path
 from typing import List, Tuple
@@ -16,7 +17,11 @@ from typing import List, Tuple
 from .config import DEFAULTS
 from .converter import ConvertOptions, convert_file
 from .reporting import FileReport, Reporter
-from .ffmpeg_utils import human_size
+from .ffmpeg_utils import (
+    human_size, ffprobe_info, list_subtitle_streams, sub_short_desc,
+    is_sdh_sub, is_text_sub, default_sub_ext,
+    lang_pretty, supports_color, color
+)
 
 from dataclasses import replace
 from .filename_infer import infer_title_and_year
@@ -24,8 +29,12 @@ from .jellyfin_naming import movie_filename, movie_folder
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Video converter (FFmpeg backend) — Talkative UX")
-    p.add_argument("--input", "-i", type=Path, required=True, help="Input file or directory")
-    p.add_argument("--output", "-o", type=Path, default=Path("videos/output"), help="Output directory")
+
+    p.add_argument("--input", "-i", type=Path, default=DEFAULTS.default_input_dir,
+        help=f"Input file or directory (default: {DEFAULTS.default_input_dir})")
+    p.add_argument("--output", "-o", type=Path, default=DEFAULTS.default_output_dir,
+        help=f"Output directory (default: {DEFAULTS.default_output_dir})")
+
     p.add_argument("--container", choices=["mp4", "mkv"], help="Output container (default: mp4)")
     p.add_argument("--hevc", action="store_true", help="Use H.265 (libx265) instead of H.264")
     p.add_argument("--crf", type=int, help="CRF value (lower = better quality)")
@@ -38,21 +47,36 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", default=False, help="Only print ffmpeg command")
     p.add_argument("--overwrite", action="store_true", help="Allow overwriting outputs")
     p.add_argument("--skip-existing", action="store_true", help="Skip when expected output already exists")
+    p.add_argument("--no-ask-audio", action="store_true",
+               help="Do not ask which audio track to use (default asks on TTY when multiple)")
     p.add_argument(
-    "--audio-track", type=int, metavar="IDX",
-    help="Audio stream index to use (0-based). Ex.: 0 = first, 1 = second..."
+        "--audio-track", type=int, metavar="IDX", default=None,
+        help="Audio stream index to use (0-based). Ex.: 0 = first, 1 = second..."
     )
 
     p.add_argument("--organize", action="store_true",
                help="Place outputs into 'Title (Year)/Title (Year).ext' folders")
     p.add_argument("--ask-missing", action="store_true",
                help="If title/year cannot be inferred, ask interactively per file")
+    p.add_argument("--ask-audio", action="store_true",
+               help="If multiple audio tracks, ask which one to use")
     p.add_argument("-v", "--verbose", action="store_true",
                help="Show full ffmpeg logs (and progress bar when possible)")
 
     # copy policies (mantemos simples)
     p.add_argument("--copy-audio-when", choices=["aac", "never"], default="aac", help="Copy audio when AAC")
     p.add_argument("--no-copy-subs", action="store_true", help="Disable subtitle copy/convert")
+
+    p.add_argument("--extract-subs", action="store_true",
+               help="Detect and extract embedded subtitles to files")
+    p.add_argument("--subs-out", type=Path, default=None,
+               help="Directory to write extracted subtitles (default: alongside output video)")
+    p.add_argument("--subs-select", type=str, default=None,
+               help="Comma-separated subtitle stream indexes to extract (or 'all'). If omitted, non-SDH are preselected and you can confirm/edit interactively.")
+    p.add_argument("--no-ask-subs", action="store_true",
+               help="Do not prompt for subtitle selection; use --subs-select or default non-SDH")
+
+
     return p.parse_args()
 
 
@@ -92,11 +116,111 @@ def prompt_title_year(suggest_title: str | None, suggest_year: int | None) -> tu
     return title, year
 
 
+
+def _describe_audio_stream(s: dict) -> str:
+    tags = s.get("tags") or {}
+    lang = (tags.get("language") or "und").lower()
+    title = tags.get("title") or ""
+    codec = s.get("codec_name") or "?"
+    ch = s.get("channels") or "?"
+    extras = f" | {title}" if title else ""
+    return f"lang={lang} | codec={codec} | ch={ch}{extras}"
+
+def prompt_audio_choice(streams: list[dict]) -> int:
+    print("  → Multiple audio tracks detected. Choose one (index):")
+    for i, s in enumerate(streams):
+        print(f"    [{i}] {_describe_audio_stream(s)}")
+    default = 0
+    while True:
+        raw = input(f"    Use which index? [default: {default}]: ").strip()
+        if raw == "":
+            return default
+        if raw.isdigit():
+            idx = int(raw)
+            if 0 <= idx < len(streams):
+                return idx
+        print(f"    Invalid choice. Enter a number between 0 and {len(streams)-1}.")
+
+
+def _truncate(s: str, maxlen: int = 40) -> str:
+    s = s or ""
+    return (s[: maxlen - 1] + "…") if len(s) > maxlen else s
+
+def _parse_indexes(inp: str, max_idx: int) -> list[int]:
+    """
+    Aceita: vírgula, espaço ou ';' como separadores; intervalos 2-5; 'all'/'none'.
+    Ignora fora de faixa; deduplica.
+    """
+    s = (inp or "").strip().lower()
+    if not s:
+        return []
+    if s in {"all", "none"}:
+        return list(range(max_idx + 1)) if s == "all" else []
+    picks: set[int] = set()
+    for part in re.split(r"[,\s;]+", s):
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            if a.isdigit() and b.isdigit():
+                start, end = int(a), int(b)
+                if start > end:
+                    start, end = end, start
+                for v in range(start, end + 1):
+                    if 0 <= v <= max_idx:
+                        picks.add(v)
+        elif part.isdigit():
+            v = int(part)
+            if 0 <= v <= max_idx:
+                picks.add(v)
+    return sorted(picks)
+
+def prompt_subs_choice(streams: list[dict], preselect: list[int]) -> list[int]:
+    """Tabela alinhada e confirmação final. Enter aceita sugestão (não-SDH)."""
+    use_color = supports_color()
+    use_flags = False  # emojis desativados => alinhamento perfeito
+    print("  → Subtitles detected. Choose which to extract.")
+    hdr = f"{'IDX':>3}  {'LANG':<28} {'CODEC':<8} {'CH':<2} {'FORCED':<6} {'SDH':<3}  TITLE"
+    print(color(hdr, "1;36") if use_color else hdr)
+
+    for i, s in enumerate(streams):
+        tags = s.get("tags") or {}
+        lang = (tags.get("language") or "und").lower()
+        title = _truncate(tags.get("title") or "", 40)
+        codec = (s.get("codec_name") or "?").lower()
+        ch = s.get("channels") or ""
+        forced = "yes" if int((s.get("disposition") or {}).get("forced", 0)) == 1 else "no"
+        sdh = "yes" if is_sdh_sub(s) else "no"
+        lang_col = f"{lang_pretty(lang, flags=use_flags)} ({lang.upper()})"
+        mark = "*" if i in preselect else " "
+        line = f"{mark}{i:>2}   {lang_col:<28} {codec:<8} {str(ch):<2} {forced:<6} {sdh:<3}  {title}"
+        print(color(line, "1;33") if (use_color and i in preselect) else line)
+
+    default_str = ",".join(str(i) for i in preselect) if preselect else "none"
+    while True:
+        raw = input(f"    Select (e.g. 0,2-4 or 'all'/'none') [default: {default_str}]: ").strip()
+        picks = preselect if raw == "" else _parse_indexes(raw, len(streams) - 1)
+        if picks == [] and raw.lower() not in {"", "none"}:
+            print(f"    No valid indexes parsed. Try numbers/ranges within 0..{len(streams)-1}.")
+            continue
+        print(f"    → Using: {picks if picks else 'none'}")
+        ok = input("    Confirm? [Y/n]: ").strip().lower()
+        if ok in {"", "y", "yes"}:
+            return picks
+
+
+
 def run_cli() -> int:
     args = parse_args()
     ask_if_needed(args)
+    interactive_tty = sys.stdin.isatty()
 
+    if not args.input.exists():
+        print(f"⚠️  Input path not found: {args.input}")
+        print("   Dica: ajuste em .env (JFCVT_INPUT_DIR) ou passe --input.")
+        return 1
     inputs = iter_inputs(args.input, bool(args.recursive))
+
     if not inputs:
         print("⚠️ No input files found.")
         return 0
@@ -116,7 +240,8 @@ def run_cli() -> int:
         year=args.year,
         dry_run=bool(args.dry_run),
         verbose=bool(args.verbose),
-        audio_track=args.audio_track,
+        audio_track=getattr(args, "audio_track", None),
+        no_copy_subs=bool(args.no_copy_subs),
     )
 
     # Skip-existing (baseado no nome final esperado)
@@ -169,7 +294,35 @@ def run_cli() -> int:
             file_title = inferred_title
             file_year = args.year if args.year else inferred_year
 
-        # 2) Decide output dir (organize or flat)
+        # 2) Se necessário, decidir/perguntar a faixa de áudio
+        chosen_audio_track = args.audio_track
+        if chosen_audio_track is None:
+            try:
+                info = ffprobe_info(src)
+                audio_streams = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
+                if len(audio_streams) == 1:
+                    chosen_audio_track = 0
+                    if args.verbose:
+                        print(f"  ℹ️  Single audio track detected → using index 0 ({_describe_audio_stream(audio_streams[0])})")
+                elif len(audio_streams) >= 2:
+                    # Regra: pergunta se estivermos num TTY e usuário não bloqueou com --no-ask-audio
+                    if interactive_tty and not args.no_ask_audio:
+                        chosen_audio_track = prompt_audio_choice(audio_streams)
+                    else:
+                        # Não interativo: cai no índice 0 de forma determinística
+                        chosen_audio_track = 0
+                    if args.verbose and chosen_audio_track is not None:
+                        print(f"  ℹ️  Chosen audio index: {chosen_audio_track} ({_describe_audio_stream(audio_streams[chosen_audio_track])})")
+                else:
+                    # padrão: usa 0 se não pedir escolha
+                    chosen_audio_track = 0 if audio_streams else 0
+            except Exception as e:
+                # se ffprobe falhar aqui, converter cuidará do fallback
+                if args.verbose:
+                    print(f"  ⚠️  ffprobe failed during audio inspection: {e} — falling back to index 0")
+                chosen_audio_track = 0
+
+        # 3) Decide output dir (organize or flat)
         target_dir = out_dir
         if args.organize:
             target_dir = out_dir / movie_folder(file_title, file_year)
@@ -206,9 +359,50 @@ def run_cli() -> int:
         t0 = time.time()
 
          # 5) Clone opts com título/ano por arquivo
-        file_opts = replace(opts, title=file_title, year=file_year)
+        file_opts = replace(opts, title=file_title, year=file_year, audio_track=chosen_audio_track)
 
-        # 6) Converter (salva em target_dir)
+        # 6) (opcional) Extração de legendas embutidas
+        if args.extract_subs:
+            try:
+                info = ffprobe_info(src)
+                sub_streams = list_subtitle_streams(info)
+                if sub_streams:
+                    # sugestão: apenas não-SDH
+                    non_sdh = [i for i, s in enumerate(sub_streams) if not is_sdh_sub(s)]
+                    suggested = non_sdh if non_sdh else []
+                    # seleção automática se --subs-select foi fornecido
+                    if args.subs_select:
+                        if args.subs_select.strip().lower() == "all":
+                            picks = list(range(len(sub_streams)))
+                        else:
+                            picks = [int(x) for x in args.subs_select.split(",") if x.strip()!=""]
+                    else:
+                        if not args.no_ask_subs and sys.stdin.isatty():
+                            picks = prompt_subs_choice(sub_streams, suggested)
+                        else:
+                            picks = suggested  # não-interativo: tarefa limpa
+                    # decide pasta: por padrão AO LADO do vídeo de saída (melhor para players)
+                    subs_dir = args.subs_out or target_dir
+                    base_name = movie_filename(file_title, file_year, (args.container or DEFAULTS.container))
+                    base_name = Path(base_name).with_suffix("").name  # sem extensão
+                    # chama extração
+                    from .converter import extract_subs  # import leve, evita ciclo
+                    generated = extract_subs(src, sub_streams, picks, subs_dir, base_name)
+                    if args.verbose:
+                        if generated:
+                            print("  💬 Subtitles extracted:")
+                            for p in generated:
+                                print("     •", p)
+                        else:
+                            print("  ℹ️  No subtitles extracted.")
+                else:
+                    if args.verbose:
+                        print("  ℹ️  No embedded subtitles found.")
+            except Exception as e:
+                print(f"  ⚠️  Subtitle inspection/extraction failed: {e}")
+
+
+        # 7) Converter (salva em target_dir)
         success, err, outpath, cmd = convert_file(src, target_dir, file_opts)
         
         print(" ffmpeg:", " ".join(cmd))

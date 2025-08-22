@@ -6,10 +6,12 @@ across the codebase. You can change presets, codecs, CRF values, etc. here
 and other modules will pick them up.
 """
 import os
+from dotenv import load_dotenv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+load_dotenv()
 
 @dataclass(frozen=True)
 class Defaults:
