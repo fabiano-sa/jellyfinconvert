@@ -14,7 +14,6 @@ Heuristics:
 """
 
 from __future__ import annotations
-
 import re
 from pathlib import Path
 
@@ -186,3 +185,38 @@ def infer_title_and_year(filename: str) -> tuple[str, int | None]:
     # Optional: smarter capitalization could be added; we keep original case of tokens.
 
     return raw_title, year
+
+# --- Séries ---------------------------------------------------------------
+EP_RE = re.compile(r"(?i)\bS(?P<sn>\d{1,2})\s*[EX]\s*(?P<ep>\d{1,2})\b")
+SEASON_WORD_RE = re.compile(
+    r"(?i)\bseason\s*(?P<sn>\d{1,2}).*?\b(ep(isode)?|cap(ítulo)?)\s*(?P<ep>\d{1,2})\b"
+)
+
+def parse_series_info(filename: str) -> tuple[str, Optional[int], Optional[int], Optional[int]]:
+    """
+    Tenta extrair: (show_title, year, season, episode) a partir do nome do arquivo.
+    Ex.: "My.Show.2019.S02E03.1080p" -> ("My Show", 2019, 2, 3)
+         "Show Name Season 01 Episode 02.mkv" -> ("Show Name", None, 1, 2)
+    """
+    stem = Path(filename).stem
+    year = None
+    m_year = YEAR_RE.search(stem)
+    if m_year:
+        year = int(m_year.group(1))
+
+    m = EP_RE.search(stem) or SEASON_WORD_RE.search(stem)
+    if not m:
+        # Sem padrão de episódio: trate como filme (retorna apenas título/ano).
+        title, y = infer_title_and_year(filename)
+        return title, y, None, None
+
+    season = int(m.group("sn"))
+    episode = int(m.group("ep"))
+
+    # Pega tudo antes do match como título bruto
+    before = stem[: m.start()]
+    tokens = _clean_tokens(TOKEN_SPLIT_RE.split(before))
+    if not tokens:
+        tokens = [stem]
+    title = _collapse_spaces(" ".join(tokens))
+    return title, year, season, episode

@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 
 from app.config import DEFAULTS
 from app.converter import ConvertOptions, convert_file
+from app.filename_infer import infer_title_and_year, parse_series_info
+from app.reporting import FileReport, Reporter
 from app.ffmpeg_utils import (
     color,
     ffprobe_info,
@@ -29,9 +31,13 @@ from app.ffmpeg_utils import (
     list_subtitle_streams,
     supports_color,
 )
-from app.filename_infer import infer_title_and_year
-from app.jellyfin_naming import movie_filename, movie_folder
-from app.reporting import FileReport, Reporter
+from app.jellyfin_naming import (
+    movie_filename,
+    movie_folder,
+    series_folder,
+    season_folder,
+    episode_filename,
+)
 
 load_dotenv(".env.local", override=True)  # valores reais, privados
 load_dotenv()  # também carrega .env (se existir), como fallback
@@ -309,7 +315,7 @@ def run_cli() -> int:
         no_copy_subs=bool(args.no_copy_subs),
     )
 
-    # Skip-existing (baseado no nome final esperado)
+    # Skip-existing (simples, só quando title/year foram dados na CLI)
     if args.skip_existing and not opts.dry_run and args.title:
         cont = args.container or DEFAULTS.container
         year_part = f" ({args.year})" if args.year else ""
@@ -333,10 +339,7 @@ def run_cli() -> int:
     print(f"• Mode:      {'DRY-RUN' if opts.dry_run else 'EXECUTE'}")
     if opts.max_height:
         print(f"• Max height: {opts.max_height}")
-    if opts.hevc:
-        print("• Codec:     H.265 (libx265)")
-    else:
-        print("• Codec:     H.264 (libx264)")
+    print(f"• Codec:     {'H.265 (libx265)' if opts.hevc else 'H.264 (libx264)'}")
     print("-" * 60)
 
     if inputs:
@@ -350,19 +353,26 @@ def run_cli() -> int:
     start_all = time.time()
 
     total = len(inputs)
+    is_tv_batch = total > 1  # 1 arquivo => filme; >1 => série
+
     for idx, src in enumerate(inputs, start=1):
         input_size = src.stat().st_size if src.exists() else 0
 
-        # 1) Per-file: prefer CLI args; else infer from filename
+        # 1) Per-file: movie vs series infer
+        season = None
+        episode = None
         if args.title:
             file_title = args.title
             file_year = args.year
         else:
-            inferred_title, inferred_year = infer_title_and_year(src.name)
-            file_title = inferred_title
-            file_year = args.year if args.year else inferred_year
+            if is_tv_batch:
+                t, y, sn, ep = parse_series_info(src.name)
+                file_title, file_year, season, episode = t, (args.year or y), sn, ep
+            else:
+                t, y = infer_title_and_year(src.name)
+                file_title, file_year = t, (args.year or y)
 
-        # 2) Se necessário, decidir/perguntar a faixa de áudio
+        # 2) Escolha/consulta de faixa de áudio
         chosen_audio_track = args.audio_track
         if chosen_audio_track is None:
             try:
@@ -376,40 +386,48 @@ def run_cli() -> int:
                         desc0 = _describe_audio_stream(audio_streams[0])
                         print(f"  ℹ️  Single audio track detected → using index 0 ({desc0})")
                 elif len(audio_streams) >= 2:
-                    # Regra: pergunta se estivermos num TTY
-                    # e se o usuário não bloqueou com --no-ask-audio.
                     if interactive_tty and not args.no_ask_audio:
                         chosen_audio_track = prompt_audio_choice(audio_streams)
                     else:
-                        # Não interativo: cai no índice 0 de forma determinística
                         chosen_audio_track = 0
                     if args.verbose and chosen_audio_track is not None:
                         chdesc = _describe_audio_stream(audio_streams[chosen_audio_track])
                         print(f"  ℹ️  Chosen audio index: {chosen_audio_track} ({chdesc})")
                 else:
-                    # padrão: usa 0 se não pedir escolha
-                    chosen_audio_track = 0 if audio_streams else 0
+                    chosen_audio_track = 0
             except Exception as e:
-                # se ffprobe falhar aqui, converter cuidará do fallback
                 if args.verbose:
-                    msg = (
+                    print(
                         f"  ⚠️  ffprobe failed during audio inspection: {e} — "
                         "falling back to index 0"
                     )
-                    print(msg)
                 chosen_audio_track = 0
 
-        # 3) Decide output dir (organize or flat)
-        target_dir = out_dir
+        # 3) Decide output dir (sempre defina target_dir!)
+        target_dir = out_dir  # default (flat)
         if args.organize:
-            target_dir = out_dir / movie_folder(file_title, file_year)
+            if is_tv_batch and season is not None and episode is not None:
+                target_dir = (
+                    out_dir
+                    / "TV"
+                    / series_folder(file_title, file_year)
+                    / season_folder(int(season))
+                )
+            else:
+                target_dir = out_dir / "Movies" / movie_folder(file_title, file_year)
             target_dir.mkdir(parents=True, exist_ok=True)
 
-        # 3) Skip-existing (ONLY compute expected_out here; don't use it elsewhere)
+        # 3b) Skip-existing (usa target_dir definido)
         if args.skip_existing and not opts.dry_run:
-            expected_out = target_dir / movie_filename(
-                file_title, file_year, (args.container or DEFAULTS.container)
-            )
+            if is_tv_batch and season is not None and episode is not None:
+                expected_name = episode_filename(
+                    file_title, int(season), int(episode), (args.container or DEFAULTS.container)
+                )
+            else:
+                expected_name = movie_filename(
+                    file_title, file_year, (args.container or DEFAULTS.container)
+                )
+            expected_out = target_dir / expected_name
             if expected_out.exists():
                 skipped_count += 1
                 rel = expected_out.relative_to(out_dir)
@@ -428,7 +446,7 @@ def run_cli() -> int:
                 print("-" * 60)
                 continue
 
-        # 4) Mensagem de início (uma vez só)
+        # 4) Mensagem de início
         print(
             f"[{idx}/{total}] Iniciando: {src.name} → '{file_title}' ({file_year or '-'})  "
             f"({human_size(input_size)})"
@@ -436,36 +454,58 @@ def run_cli() -> int:
 
         t0 = time.time()
 
-        # 5) Clone opts com título/ano por arquivo
-        file_opts = replace(opts, title=file_title, year=file_year, audio_track=chosen_audio_track)
+        # 5) Clone opts com título/ano/áudio/episódio
+        file_opts = replace(
+            opts,
+            title=file_title,
+            year=file_year,
+            audio_track=chosen_audio_track,
+            season=season,
+            episode=episode,
+        )
 
-        # 6) (opcional) Extração de legendas embutidas
+        # 6) Extração de legendas (fix de indent + chamada para filmes e séries)
         if args.extract_subs:
             try:
                 info = ffprobe_info(src)
                 sub_streams = list_subtitle_streams(info)
                 if sub_streams:
-                    # sugestão: apenas não-SDH
                     non_sdh = [i for i, s in enumerate(sub_streams) if not is_sdh_sub(s)]
                     suggested = non_sdh if non_sdh else []
-                    # seleção automática se --subs-select foi fornecido
+
                     if args.subs_select:
                         if args.subs_select.strip().lower() == "all":
                             picks = list(range(len(sub_streams)))
                         else:
-                            picks = [int(x) for x in args.subs_select.split(",") if x.strip() != ""]
+                            picks = [
+                                int(x) for x in args.subs_select.split(",") if x.strip() != ""
+                            ]
                     else:
                         if not args.no_ask_subs and sys.stdin.isatty():
                             picks = prompt_subs_choice(sub_streams, suggested)
                         else:
-                            picks = suggested  # não-interativo: tarefa limpa
-                    # decide pasta: por padrão AO LADO do vídeo de saída (melhor para players)
+                            picks = suggested
+
                     subs_dir = args.subs_out or target_dir
-                    base_name = movie_filename(
-                        file_title, file_year, (args.container or DEFAULTS.container)
-                    )
-                    base_name = Path(base_name).with_suffix("").name  # sem extensão
-                    # chama extração
+
+                    if is_tv_batch and season is not None and episode is not None:
+                        base_name = Path(
+                            episode_filename(
+                                file_title,
+                                int(season),
+                                int(episode),
+                                (args.container or DEFAULTS.container),
+                            )
+                        ).with_suffix("").name
+                    else:
+                        base_name = Path(
+                            movie_filename(
+                                file_title,
+                                file_year,
+                                (args.container or DEFAULTS.container),
+                            )
+                        ).with_suffix("").name
+
                     from .converter import extract_subs  # import leve, evita ciclo
 
                     generated = extract_subs(src, sub_streams, picks, subs_dir, base_name)
@@ -537,3 +577,4 @@ def run_cli() -> int:
     print(f"• Tempo total: {elapsed:.1f}s")
     print(f"• Relatórios: {DEFAULTS.report_csv}  |  {DEFAULTS.report_json}")
     return 0
+

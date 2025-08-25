@@ -25,7 +25,7 @@ from app.ffmpeg_utils import (
     run_streaming,
     sub_short_desc,
 )
-from app.jellyfin_naming import movie_filename
+from app.jellyfin_naming import movie_filename, episode_filename
 from app.metadata import build_metadata
 
 
@@ -53,7 +53,9 @@ class ConvertOptions:
     verbose: bool = False
     audio_track: int | None = None
     no_copy_subs: bool = False
-
+    # Séries (opcionais). Se ambos presentes, nome de saída vira episódio.
+    season: int = None
+    episode: int = None
 
 def _target_video_codec(hevc: bool, defaults: Defaults) -> str:
     return defaults.video_codec_h265 if hevc else defaults.video_codec_h264
@@ -206,26 +208,33 @@ def convert_file(
         (success, error_message, final_output_path, ffmpeg_cmd)
     """
 
-    # 1) Garante diretório e decide names/paths (FINAL e TMP *dentro* de out_dir)
+    # 1) Garante diretório e decide FINAL/TMP *dentro* de out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+
     container = (opts.container or DEFAULTS.container).lower()
     title = opts.title or src.stem
-    final_out = out_dir / movie_filename(title, opts.year, container)
-    tmp_out = final_out.with_name(final_out.stem + ".tmp" + final_out.suffix)
 
-    # 2) Build ffmpeg command (write directly to tmp_out in the CORRECT folder)
-    # (quality knobs calculados mais abaixo ao montar cmd)
+    # Nome final: episódio se season+episode existem; senão, filme
+    if getattr(opts, "season", None) is not None and getattr(opts, "episode", None) is not None:
+        name = episode_filename(title, int(opts.season), int(opts.episode), container)
+    else:
+        name = movie_filename(title, opts.year, container)
+
+    final_out = out_dir / name
+    tmp_out = final_out.with_name(f"{final_out.stem}.tmp{final_out.suffix}")
+
+    # 2) Probe + scale + escolha de áudio
     try:
         info = ffprobe_info(src)
     except Exception as e:
         return False, f"ffprobe failed: {e}", final_out, []
 
-    scale = build_scale_filter(opts.max_height, info) if getattr(opts, "max_height", None) else None
+    scale = build_scale_filter(getattr(opts, "max_height", None), info)
 
     audio_streams = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
     audio_count = len(audio_streams)
 
-    requested = getattr(opts, "audio_track", None)  # vindo de --audio-track
+    requested = getattr(opts, "audio_track", None)
     if requested is not None and (requested < 0 or requested >= audio_count):
         chosen_audio = 0
         print(
@@ -245,18 +254,18 @@ def convert_file(
         include_sub_0_optional=True,
     )
 
-    # 3) Dry-run? Só retorna o plano
+    # 3) Dry-run
     if getattr(opts, "dry_run", False):
         return True, "", final_out, cmd
 
-    # 4) Limpeza prévia do tmp (caso exista de execução anterior)
+    # 4) Limpa tmp antigo
     try:
         if tmp_out.exists():
             tmp_out.unlink()
     except Exception:
         pass
 
-    # 5) Executa ffmpeg **UMA ÚNICA VEZ**
+    # 5) Executa ffmpeg
     duration = get_duration(str(src))
     code = run_streaming(cmd, duration, verbose=getattr(opts, "verbose", False))
     if code != 0:
@@ -267,7 +276,7 @@ def convert_file(
             pass
         return False, "ffmpeg returned non-zero exit code", final_out, cmd
 
-    # 6) Rename atômico tmp → final
+    # 6) Rename atômico
     try:
         tmp_out.replace(final_out)
     except Exception as e:
@@ -279,3 +288,4 @@ def convert_file(
         return False, f"Atomic rename failed: {e}", final_out, cmd
 
     return True, "", final_out, cmd
+
