@@ -67,8 +67,10 @@ def build_ffmpeg_cmd(
     scale_filter: str | None,
     opts: ConvertOptions,
     defaults: Defaults = DEFAULTS,
+    *,
     audio_map_index: int = 0,
     include_sub_0_optional: bool = True,
+    audio_channels: int | None = None,  # novo: para ajustar bitrate se 5.1+
 ) -> list[str]:
     """
     Build an ffmpeg command list based on options + decided scale filter.
@@ -94,47 +96,49 @@ def build_ffmpeg_cmd(
 
     filter_args: list[str] = []
     if scale_filter:
-        # Keep aspect ratio: scale=-2:MAX (already decided upstream)
         filter_args = ["-vf", scale_filter]
 
     # Mapas de streams (vídeo 0, áudio escolhido)
     map_args: list[str] = ["-map", "0:v:0", "-map", f"0:a:{audio_map_index}"]
 
-    # Subtítulos: por padrão não copiar para MP4 (PGS não é suportado) ou quando no_copy_subs=True
+    # Subtítulos: não copiar para MP4 (PGS não é suportado) ou quando no_copy_subs=True
     ext = output_path.suffix.lower().lstrip(".")
     can_copy_subs = (ext != "mp4") and include_sub_0_optional and (not opts.no_copy_subs)
     if can_copy_subs:
         map_args += ["-map", "0:s:0?"]
 
+    # Áudio: bitrate “um pouco mais alto” se 5.1+, senão default
+    a_bitrate = defaults.audio_bitrate
+    if audio_channels is not None and audio_channels >= 6:
+        # sobrescreve para 5.1+: 384k é um ponto seguro
+        a_bitrate = "384k"
+
     cmd: list[str] = [
         "ffmpeg",
-        "-y",  # allow overwrite (we'll add policies later)
+        "-y",
         "-hide_banner",
-        "-loglevel",
-        "info",
-        "-i",
-        str(input_path),
+        "-loglevel", "info",
+        "-i", str(input_path),
         *map_args,
         *filter_args,
-        "-c:v",
-        vcodec,
-        "-preset",
-        preset,
+        "-c:v", vcodec,
+        "-preset", preset,
         *video_quality_args,
-        "-c:a",
-        defaults.audio_codec,
-        "-b:a",
-        defaults.audio_bitrate,
+        "-c:a", defaults.audio_codec, "-b:a", a_bitrate,
         *meta_args,
     ]
 
-    # MP4: melhor para streaming (Jellyfin/web players)
-    ext = output_path.suffix.lower().lstrip(".")
+    # H.264: garantir compat (evita 10-bit/high10 etc.)
+    if not opts.hevc:
+        cmd += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"]
+
+    # MP4: melhor para streaming
     if ext == "mp4":
         cmd += ["-movflags", "+faststart"]
 
     cmd += [str(output_path)]
     return cmd
+
 
 
 def _build_sub_extraction_cmd(
@@ -244,6 +248,15 @@ def convert_file(
     else:
         chosen_audio = requested if requested is not None else 0
 
+    # canais do áudio escolhido (p/ ajustar compat & bitrate no construtor)
+    audio_channels = None
+    if 0 <= chosen_audio < audio_count:
+        try:
+            ch_val = audio_streams[chosen_audio].get("channels") or 0
+            audio_channels = int(ch_val) or None
+        except Exception:
+            audio_channels = None
+
     cmd = build_ffmpeg_cmd(
         input_path=src,
         output_path=tmp_out,
@@ -251,7 +264,9 @@ def convert_file(
         opts=opts,
         defaults=DEFAULTS,
         audio_map_index=chosen_audio,
-        include_sub_0_optional=True,
+        # Em MP4 não copiamos subs (PGS não é suportado); mkv pode copiar a 0:s:0?
+        include_sub_0_optional=(container != "mp4"),
+        audio_channels=audio_channels,
     )
 
     # 3) Dry-run
