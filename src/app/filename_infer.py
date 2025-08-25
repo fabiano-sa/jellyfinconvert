@@ -16,6 +16,7 @@ Heuristics:
 from __future__ import annotations
 import re
 from pathlib import Path
+from typing import Optional
 
 # Acceptable year pattern (not part of a longer number)
 YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
